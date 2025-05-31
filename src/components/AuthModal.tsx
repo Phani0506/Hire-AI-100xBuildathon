@@ -7,14 +7,15 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { X, Mail, User } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAuthSuccess: (user: any) => void;
 }
 
-const AuthModal = ({ isOpen, onClose, onAuthSuccess }: AuthModalProps) => {
+const AuthModal = ({ isOpen, onClose }: AuthModalProps) => {
+  const { signIn, signUp } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     email: "",
@@ -36,21 +37,31 @@ const AuthModal = ({ isOpen, onClose, onAuthSuccess }: AuthModalProps) => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Mock login - will be replaced with Supabase
-    setTimeout(() => {
-      const user = {
-        id: "mock-user-id",
-        email: formData.email,
-        full_name: formData.email.split('@')[0]
-      };
+    try {
+      const { error } = await signIn(formData.email, formData.password);
       
-      onAuthSuccess(user);
+      if (error) {
+        toast({
+          title: "Login failed",
+          description: error.message,
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Welcome back!",
+          description: "You've successfully signed in.",
+        });
+        onClose();
+      }
+    } catch (error) {
       toast({
-        title: "Welcome back!",
-        description: "You've successfully signed in.",
+        title: "Login failed",
+        description: "An unexpected error occurred.",
+        variant: "destructive"
       });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   const handleSignup = async (e: React.FormEvent) => {
@@ -67,21 +78,31 @@ const AuthModal = ({ isOpen, onClose, onAuthSuccess }: AuthModalProps) => {
 
     setIsLoading(true);
 
-    // Mock signup - will be replaced with Supabase
-    setTimeout(() => {
-      const user = {
-        id: "mock-user-id",
-        email: formData.email,
-        full_name: formData.fullName || formData.email.split('@')[0]
-      };
+    try {
+      const { error } = await signUp(formData.email, formData.password, formData.fullName);
       
-      onAuthSuccess(user);
+      if (error) {
+        toast({
+          title: "Signup failed",
+          description: error.message,
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Account created!",
+          description: "Please check your email for verification link.",
+        });
+        onClose();
+      }
+    } catch (error) {
       toast({
-        title: "Account created!",
-        description: "Welcome to HIRE AI. Let's build your talent pool.",
+        title: "Signup failed",
+        description: "An unexpected error occurred.",
+        variant: "destructive"
       });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (

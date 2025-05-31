@@ -1,41 +1,33 @@
 
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Search, FileText, BarChart } from "lucide-react";
 import AuthModal from "@/components/AuthModal";
 import Dashboard from "@/components/Dashboard";
+import { useState } from "react";
 
 const Index = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const { user, loading } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [user, setUser] = useState(null);
 
-  // Mock authentication check - will be replaced with Supabase
-  useEffect(() => {
-    const mockUser = localStorage.getItem('mockUser');
-    if (mockUser) {
-      setIsAuthenticated(true);
-      setUser(JSON.parse(mockUser));
-    }
-  }, []);
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg flex items-center justify-center mx-auto mb-4">
+            <Users className="w-5 h-5 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            Loading HIRE AI...
+          </h1>
+        </div>
+      </div>
+    );
+  }
 
-  const handleAuthSuccess = (userData: any) => {
-    setIsAuthenticated(true);
-    setUser(userData);
-    setShowAuthModal(false);
-    localStorage.setItem('mockUser', JSON.stringify(userData));
-  };
-
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    setUser(null);
-    localStorage.removeItem('mockUser');
-  };
-
-  if (isAuthenticated) {
-    return <Dashboard user={user} onLogout={handleLogout} />;
+  if (user) {
+    return <Dashboard />;
   }
 
   return (
@@ -165,7 +157,6 @@ const Index = () => {
         <AuthModal 
           isOpen={showAuthModal}
           onClose={() => setShowAuthModal(false)}
-          onAuthSuccess={handleAuthSuccess}
         />
       )}
     </div>

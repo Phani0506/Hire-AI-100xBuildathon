@@ -9,14 +9,15 @@ import ResumeUpload from "@/components/ResumeUpload";
 import TalentSearch from "@/components/TalentSearch";
 import AnalyticsDashboard from "@/components/AnalyticsDashboard";
 import ResumeList from "@/components/ResumeList";
+import { useAuth } from "@/hooks/useAuth";
 
-interface DashboardProps {
-  user: any;
-  onLogout: () => void;
-}
-
-const Dashboard = ({ user, onLogout }: DashboardProps) => {
+const Dashboard = () => {
+  const { user, signOut } = useAuth();
   const [activeTab, setActiveTab] = useState("dashboard");
+
+  const handleLogout = async () => {
+    await signOut();
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
@@ -37,7 +38,7 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
                 <User className="w-5 h-5 text-gray-600" />
                 <span className="text-sm text-gray-600">{user?.email}</span>
               </div>
-              <Button variant="outline" onClick={onLogout}>
+              <Button variant="outline" onClick={handleLogout}>
                 Logout
               </Button>
             </div>
@@ -48,7 +49,7 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
       {/* Main Content */}
       <div className="container mx-auto px-6 py-8">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold mb-2 text-gray-800">Welcome back, {user?.full_name}!</h2>
+          <h2 className="text-3xl font-bold mb-2 text-gray-800">Welcome back!</h2>
           <p className="text-gray-600">Manage your talent pool and find the perfect candidates with AI-powered tools.</p>
         </div>
 
@@ -105,19 +106,15 @@ const Dashboard = ({ user, onLogout }: DashboardProps) => {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Full Name</label>
-                  <Input value={user?.full_name || ""} disabled />
-                </div>
-                <div className="space-y-2">
                   <label className="text-sm font-medium">Email</label>
                   <Input value={user?.email || ""} disabled />
                 </div>
                 <div className="pt-4 border-t">
                   <p className="text-sm text-gray-600 mb-4">
-                    API Configuration will be available when Supabase integration is connected.
+                    Configure your Groq API key for AI-powered features.
                   </p>
-                  <Button variant="outline" disabled>
-                    Configure Groq API
+                  <Button variant="outline">
+                    Configure Groq API Key
                   </Button>
                 </div>
               </CardContent>
