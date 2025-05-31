@@ -53,6 +53,8 @@ const ResumeUpload = () => {
       throw new Error('User not authenticated');
     }
 
+    console.log('Starting upload for file:', file.name, 'User ID:', user.id);
+
     // Create file path with user folder structure
     const fileExt = file.name.split('.').pop();
     const fileName = `${user.id}/${fileId}.${fileExt}`;
@@ -69,6 +71,8 @@ const ResumeUpload = () => {
       console.error('Upload error:', uploadError);
       throw uploadError;
     }
+
+    console.log('File uploaded successfully:', uploadData);
 
     // Insert record into resumes table
     const { data: resumeData, error: resumeError } = await supabase
@@ -94,6 +98,7 @@ const ResumeUpload = () => {
       throw resumeError;
     }
 
+    console.log('Resume record created:', resumeData);
     return resumeData;
   };
 
@@ -107,27 +112,45 @@ const ResumeUpload = () => {
       return;
     }
 
-    const validFiles = files.filter(file => 
-      file.type === 'application/pdf' || 
-      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      file.type === 'application/msword'
-    );
+    // Expanded list of supported file types
+    const allowedTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+      'application/msword', // .doc
+      'text/plain', // .txt
+      'application/rtf', // .rtf
+      'text/rtf', // .rtf (alternative MIME type)
+      'application/vnd.oasis.opendocument.text', // .odt
+    ];
+
+    const validFiles = files.filter(file => {
+      const isValidType = allowedTypes.includes(file.type) || 
+                         file.name.toLowerCase().endsWith('.txt') ||
+                         file.name.toLowerCase().endsWith('.rtf') ||
+                         file.name.toLowerCase().endsWith('.odt');
+      
+      if (!isValidType) {
+        console.log('Invalid file type:', file.type, 'for file:', file.name);
+      }
+      
+      return isValidType;
+    });
 
     if (validFiles.length === 0) {
       toast({
         title: "Invalid file type",
-        description: "Please upload PDF or Word documents only.",
+        description: "Please upload PDF, Word documents (.doc, .docx), text files (.txt), RTF files (.rtf), or ODT files.",
         variant: "destructive"
       });
       return;
     }
 
-    // Check file sizes (max 10MB)
-    const oversizedFiles = validFiles.filter(file => file.size > 10 * 1024 * 1024);
+    // Check file sizes (max 25MB to accommodate larger documents)
+    const oversizedFiles = validFiles.filter(file => file.size > 25 * 1024 * 1024);
     if (oversizedFiles.length > 0) {
       toast({
         title: "File too large",
-        description: "Please upload files smaller than 10MB.",
+        description: "Please upload files smaller than 25MB.",
         variant: "destructive"
       });
       return;
@@ -150,11 +173,13 @@ const ResumeUpload = () => {
       setUploadedFiles(prev => [...prev, uploadFile]);
 
       try {
+        console.log('Processing file:', file.name);
+        
         // Update progress to show uploading
         setUploadedFiles(prev => 
           prev.map(f => 
             f.id === fileId 
-              ? { ...f, progress: 50 }
+              ? { ...f, progress: 30 }
               : f
           )
         );
@@ -162,16 +187,25 @@ const ResumeUpload = () => {
         // Upload to Supabase
         await uploadToSupabase(file, fileId);
 
-        // Update status to processing
+        // Update progress
         setUploadedFiles(prev => 
           prev.map(f => 
             f.id === fileId 
-              ? { ...f, status: 'processing', progress: 75 }
+              ? { ...f, progress: 60 }
               : f
           )
         );
 
-        // Simulate processing time (in real app, this would be handled by background job)
+        // Update status to processing (this would trigger LLM parsing in a real app)
+        setUploadedFiles(prev => 
+          prev.map(f => 
+            f.id === fileId 
+              ? { ...f, status: 'processing', progress: 80 }
+              : f
+          )
+        );
+
+        // Simulate processing time (in real app, this would be handled by background job with LLM)
         setTimeout(() => {
           setUploadedFiles(prev => 
             prev.map(f => 
@@ -183,7 +217,7 @@ const ResumeUpload = () => {
           
           toast({
             title: "Resume uploaded",
-            description: `${file.name} has been uploaded and is ready for processing.`,
+            description: `${file.name} has been uploaded successfully and is ready for AI processing.`,
           });
         }, 2000);
 
@@ -220,6 +254,39 @@ const ResumeUpload = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const getFileTypeIcon = (fileName: string, mimeType: string) => {
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    
+    if (mimeType === 'application/pdf' || extension === 'pdf') {
+      return <FileText className="w-8 h-8 text-red-600" />;
+    } else if (
+      mimeType.includes('word') || 
+      extension === 'doc' || 
+      extension === 'docx'
+    ) {
+      return <FileText className="w-8 h-8 text-blue-600" />;
+    } else if (
+      mimeType === 'text/plain' || 
+      extension === 'txt'
+    ) {
+      return <FileText className="w-8 h-8 text-gray-600" />;
+    } else {
+      return <FileText className="w-8 h-8 text-green-600" />;
+    }
+  };
+
+  if (!user) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
+          <CardContent className="p-8 text-center">
+            <p className="text-gray-600">Please log in to upload resumes.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
@@ -229,7 +296,7 @@ const ResumeUpload = () => {
             <span>Upload Resumes</span>
           </CardTitle>
           <CardDescription>
-            Upload PDF or Word documents to build your talent pool. Files will be stored securely and processed automatically.
+            Upload documents to build your talent pool. Supports PDF, Word (.doc, .docx), text (.txt), RTF, and ODT files up to 25MB each.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -246,12 +313,12 @@ const ResumeUpload = () => {
             <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium mb-2">Drop files here or click to browse</h3>
             <p className="text-gray-600 mb-4">
-              Supports PDF and Word documents up to 10MB each
+              Supports PDF, Word, Text, RTF, and ODT documents up to 25MB each
             </p>
             <input
               type="file"
               multiple
-              accept=".pdf,.doc,.docx"
+              accept=".pdf,.doc,.docx,.txt,.rtf,.odt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain,application/rtf,text/rtf,application/vnd.oasis.opendocument.text"
               onChange={handleFileSelect}
               className="hidden"
               id="file-upload"
@@ -273,9 +340,9 @@ const ResumeUpload = () => {
       {uploadedFiles.length > 0 && (
         <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
           <CardHeader>
-            <CardTitle>Recent Uploads</CardTitle>
+            <CardTitle>Upload Progress</CardTitle>
             <CardDescription>
-              Track the upload and processing status of your resumes.
+              Track the upload and processing status of your documents.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -283,7 +350,7 @@ const ResumeUpload = () => {
               {uploadedFiles.map((file) => (
                 <div key={file.id} className="flex items-center justify-between p-3 bg-white/50 rounded-lg border">
                   <div className="flex items-center space-x-3 flex-1">
-                    <FileText className="w-8 h-8 text-blue-600" />
+                    {getFileTypeIcon(file.name, file.type)}
                     <div className="flex-1">
                       <p className="font-medium">{file.name}</p>
                       <p className="text-sm text-gray-600">{formatFileSize(file.size)}</p>

@@ -38,8 +38,14 @@ const ResumeList = () => {
   }, [user]);
 
   const fetchResumes = async () => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
+      console.log('Fetching resumes for user:', user.id);
       
       // Fetch resumes with their parsed details
       const { data: resumesData, error: resumesError } = await supabase
@@ -55,7 +61,7 @@ const ResumeList = () => {
             experience_json
           )
         `)
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .order('uploaded_at', { ascending: false });
 
       if (resumesError) {
@@ -68,6 +74,8 @@ const ResumeList = () => {
         return;
       }
 
+      console.log('Fetched resumes data:', resumesData);
+
       // Transform the data to match our interface
       const transformedResumes: ResumeWithDetails[] = resumesData?.map(resume => ({
         id: resume.id,
@@ -79,6 +87,7 @@ const ResumeList = () => {
       })) || [];
 
       setResumes(transformedResumes);
+      console.log('Transformed resumes:', transformedResumes);
     } catch (error) {
       console.error('Error in fetchResumes:', error);
       toast({
@@ -153,6 +162,18 @@ const ResumeList = () => {
     return 'Experience available';
   };
 
+  if (!user) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
+          <CardContent className="p-8 text-center">
+            <p className="text-gray-600">Please log in to view your resumes.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -172,7 +193,7 @@ const ResumeList = () => {
         <CardHeader>
           <CardTitle className="flex items-center space-x-2">
             <FileText className="w-5 h-5" />
-            <span>Resume Library</span>
+            <span>Resume Library ({resumes.length})</span>
           </CardTitle>
           <CardDescription>
             Browse and manage all uploaded resumes in your talent pool.
