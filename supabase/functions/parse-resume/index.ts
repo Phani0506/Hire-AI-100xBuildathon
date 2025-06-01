@@ -76,14 +76,17 @@ serve(async (req) => {
 
     console.log('File downloaded successfully, size:', fileData.size)
 
-    // Convert file to text (basic text extraction - for PDFs and complex docs, you might need additional parsing)
+    // Convert file to text and clean it
     let fileText = ''
     try {
       fileText = await fileData.text()
+      // Clean the text to remove problematic characters
+      fileText = fileText.replace(/\u0000/g, '') // Remove null bytes
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
+        .trim()
       console.log('File converted to text, length:', fileText.length)
     } catch (error) {
       console.error('Error converting file to text:', error)
-      // For binary files like PDFs, we might get limited text extraction
       fileText = 'Unable to extract text from file. Please ensure the file contains readable text.'
     }
 
@@ -116,7 +119,7 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: `You are a resume parser. Extract structured information from resumes and return it as JSON with these exact fields:
+            content: `You are a resume parser. Extract structured information from resumes and return ONLY a valid JSON object with these exact fields:
             {
               "full_name": "string or null",
               "email": "string or null", 
@@ -127,21 +130,19 @@ serve(async (req) => {
               "education": [{"institution": "string", "degree": "string", "year": "string", "field": "string"}]
             }
             
-            Important rules:
-            - Return ONLY valid JSON, no additional text or markdown
-            - If a field cannot be found, use null for strings or empty array for arrays
-            - Extract all skills mentioned (technical, soft skills, tools, languages)
-            - For experience, include company name, job title, duration, and brief description
-            - For education, include school/university, degree, graduation year, field of study
-            - Ensure the JSON is properly formatted and parseable`
+            CRITICAL: Return ONLY the JSON object, no additional text, explanations, or markdown formatting.
+            If a field cannot be found, use null for strings or empty array for arrays.
+            Extract all skills mentioned (technical, soft skills, tools, languages).
+            For experience, include company name, job title, duration, and brief description.
+            For education, include school/university, degree, graduation year, field of study.`
           },
           {
             role: 'user',
-            content: `Parse this resume and extract the information:\n\n${fileText.substring(0, 4000)}`
+            content: `Parse this resume and extract the information as JSON only:\n\n${fileText.substring(0, 4000)}`
           }
         ],
         temperature: 0.1,
-        max_tokens: 1500
+        max_tokens: 1000
       }),
     })
 
@@ -177,28 +178,49 @@ serve(async (req) => {
       )
     }
 
-    // Parse the JSON response
+    // Parse the JSON response with better error handling
     let parsedData
     try {
-      // Clean the response in case there's any markdown formatting
-      const cleanedContent = parsedContent.replace(/```json\n?|\n?```/g, '').trim()
+      // Clean the response more aggressively
+      let cleanedContent = parsedContent.trim()
+      
+      // Remove markdown code blocks if present
+      cleanedContent = cleanedContent.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+      
+      // Find JSON object boundaries
+      const jsonStart = cleanedContent.indexOf('{')
+      const jsonEnd = cleanedContent.lastIndexOf('}')
+      
+      if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+        cleanedContent = cleanedContent.substring(jsonStart, jsonEnd + 1)
+      }
+      
+      console.log('Attempting to parse cleaned content:', cleanedContent.substring(0, 200))
       parsedData = JSON.parse(cleanedContent)
       console.log('Successfully parsed JSON:', parsedData)
     } catch (parseError) {
       console.error('Failed to parse JSON:', parseError)
       console.error('Raw content:', parsedContent)
       
-      // Try to create a fallback structure
+      // Create a fallback structure with extracted basic info
       parsedData = {
-        full_name: null,
-        email: null,
-        phone: null,
-        location: null,
-        skills: [],
+        full_name: extractName(fileText),
+        email: extractEmail(fileText),
+        phone: extractPhone(fileText),
+        location: extractLocation(fileText),
+        skills: extractSkills(fileText),
         experience: [],
         education: []
       }
+      console.log('Using fallback parsing:', parsedData)
     }
+
+    // Clean the raw text content for database storage
+    const cleanRawText = fileText.substring(0, 5000)
+      .replace(/\u0000/g, '') // Remove null bytes
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
+      .replace(/\\/g, '\\\\') // Escape backslashes
+      .trim()
 
     // Insert parsed data into database
     console.log('Inserting parsed data into database...')
@@ -214,7 +236,7 @@ serve(async (req) => {
         skills_json: parsedData.skills || [],
         experience_json: parsedData.experience || [],
         education_json: parsedData.education || [],
-        raw_text_content: fileText.substring(0, 5000) // Store first 5000 chars
+        raw_text_content: cleanRawText
       })
 
     if (insertError) {
@@ -225,7 +247,7 @@ serve(async (req) => {
         .eq('id', resumeId)
       
       return new Response(
-        JSON.stringify({ error: 'Failed to save parsed data' }),
+        JSON.stringify({ error: 'Failed to save parsed data', details: insertError.message }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -255,3 +277,46 @@ serve(async (req) => {
     )
   }
 })
+
+// Helper functions for fallback parsing
+function extractName(text: string): string | null {
+  const lines = text.split('\n').slice(0, 10)
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed && /^[A-Z][a-z]+ [A-Z][a-z]+/.test(trimmed) && trimmed.length < 50) {
+      return trimmed
+    }
+  }
+  return null
+}
+
+function extractEmail(text: string): string | null {
+  const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/
+  const match = text.match(emailRegex)
+  return match ? match[0] : null
+}
+
+function extractPhone(text: string): string | null {
+  const phoneRegex = /(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/
+  const match = text.match(phoneRegex)
+  return match ? match[0] : null
+}
+
+function extractLocation(text: string): string | null {
+  const locationRegex = /\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b/
+  const match = text.match(locationRegex)
+  return match ? match[0] : null
+}
+
+function extractSkills(text: string): string[] {
+  const skillKeywords = ['javascript', 'python', 'java', 'react', 'node', 'sql', 'html', 'css', 'git', 'docker', 'aws', 'typescript']
+  const skills: string[] = []
+  
+  skillKeywords.forEach(skill => {
+    if (text.toLowerCase().includes(skill)) {
+      skills.push(skill.charAt(0).toUpperCase() + skill.slice(1))
+    }
+  })
+  
+  return skills
+}
