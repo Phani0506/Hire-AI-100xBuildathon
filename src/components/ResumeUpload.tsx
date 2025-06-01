@@ -207,8 +207,11 @@ const ResumeUpload = () => {
           )
         );
 
-        // Trigger AI parsing via edge function
         console.log('Triggering AI parsing for resume:', fileId);
+        
+        // Add a small delay to ensure the file is properly uploaded before parsing
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
         const parseSuccess = await triggerParsing(fileId);
 
         if (parseSuccess) {
@@ -232,6 +235,12 @@ const ResumeUpload = () => {
                 : f
             )
           );
+          
+          toast({
+            title: "Parsing failed",
+            description: `${file.name} was uploaded but AI parsing failed. Please try again.`,
+            variant: "destructive"
+          });
         }
 
       } catch (error) {
