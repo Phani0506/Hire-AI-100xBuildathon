@@ -6,6 +6,7 @@ import { Upload, FileText, Check, AlertCircle, X } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useResumeParser } from "@/hooks/useResumeParser";
 
 interface UploadedFile {
   id: string;
@@ -19,6 +20,7 @@ interface UploadedFile {
 
 const ResumeUpload = () => {
   const { user } = useAuth();
+  const { triggerParsing } = useResumeParser();
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -196,7 +198,7 @@ const ResumeUpload = () => {
           )
         );
 
-        // Update status to processing (this would trigger LLM parsing in a real app)
+        // Update status to processing and trigger AI parsing
         setUploadedFiles(prev => 
           prev.map(f => 
             f.id === fileId 
@@ -205,8 +207,11 @@ const ResumeUpload = () => {
           )
         );
 
-        // Simulate processing time (in real app, this would be handled by background job with LLM)
-        setTimeout(() => {
+        // Trigger AI parsing via edge function
+        console.log('Triggering AI parsing for resume:', fileId);
+        const parseSuccess = await triggerParsing(fileId);
+
+        if (parseSuccess) {
           setUploadedFiles(prev => 
             prev.map(f => 
               f.id === fileId 
@@ -216,10 +221,18 @@ const ResumeUpload = () => {
           );
           
           toast({
-            title: "Resume uploaded",
-            description: `${file.name} has been uploaded successfully and is ready for AI processing.`,
+            title: "Resume uploaded and parsed",
+            description: `${file.name} has been uploaded and parsed successfully with AI.`,
           });
-        }, 2000);
+        } else {
+          setUploadedFiles(prev => 
+            prev.map(f => 
+              f.id === fileId 
+                ? { ...f, status: 'error' }
+                : f
+            )
+          );
+        }
 
       } catch (error) {
         console.error('Upload failed:', error);
