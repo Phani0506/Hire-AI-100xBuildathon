@@ -80,11 +80,16 @@ serve(async (req) => {
     let fileText = ''
     try {
       fileText = await fileData.text()
-      // Clean the text to remove problematic characters
-      fileText = fileText.replace(/\u0000/g, '') // Remove null bytes
+      // More aggressive text cleaning
+      fileText = fileText
+        .replace(/\u0000/g, '') // Remove null bytes
         .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .replace(/[^\x20-\x7E\n\r\t]/g, '') // Keep only printable ASCII + newlines/tabs
         .trim()
+      
       console.log('File converted to text, length:', fileText.length)
+      console.log('First 500 characters:', fileText.substring(0, 500))
     } catch (error) {
       console.error('Error converting file to text:', error)
       fileText = 'Unable to extract text from file. Please ensure the file contains readable text.'
@@ -107,7 +112,33 @@ serve(async (req) => {
 
     console.log('Groq API key found, sending request...')
 
-    // Parse resume with Groq API
+    // Enhanced prompt for better parsing
+    const systemPrompt = `You are an expert resume parser. Extract structured information from resumes and return ONLY a valid JSON object with these exact fields:
+
+{
+  "full_name": "string or null",
+  "email": "string or null", 
+  "phone": "string or null",
+  "location": "string or null",
+  "skills": ["array", "of", "skills"],
+  "experience": [{"company": "string", "position": "string", "duration": "string", "description": "string"}],
+  "education": [{"institution": "string", "degree": "string", "year": "string", "field": "string"}]
+}
+
+CRITICAL PARSING RULES:
+1. Return ONLY the JSON object, no additional text, explanations, or markdown formatting
+2. Extract ALL information present in the resume
+3. For full_name: Look for the person's name at the top of the resume
+4. For email: Find email addresses (containing @)
+5. For phone: Find phone numbers in various formats
+6. For location: Find city, state, country information
+7. For skills: Extract ALL technical skills, programming languages, tools, frameworks, soft skills
+8. For experience: Extract ALL work experience with company names, job titles, dates, and descriptions
+9. For education: Extract schools, degrees, graduation years, fields of study
+10. If a field cannot be found, use null for strings or empty array for arrays
+11. Be thorough - don't miss any information present in the text`
+
+    // Parse resume with Groq API using enhanced prompt
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -119,30 +150,15 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: `You are a resume parser. Extract structured information from resumes and return ONLY a valid JSON object with these exact fields:
-            {
-              "full_name": "string or null",
-              "email": "string or null", 
-              "phone": "string or null",
-              "location": "string or null",
-              "skills": ["array", "of", "skills"],
-              "experience": [{"company": "string", "position": "string", "duration": "string", "description": "string"}],
-              "education": [{"institution": "string", "degree": "string", "year": "string", "field": "string"}]
-            }
-            
-            CRITICAL: Return ONLY the JSON object, no additional text, explanations, or markdown formatting.
-            If a field cannot be found, use null for strings or empty array for arrays.
-            Extract all skills mentioned (technical, soft skills, tools, languages).
-            For experience, include company name, job title, duration, and brief description.
-            For education, include school/university, degree, graduation year, field of study.`
+            content: systemPrompt
           },
           {
             role: 'user',
-            content: `Parse this resume and extract the information as JSON only:\n\n${fileText.substring(0, 4000)}`
+            content: `Parse this resume text and extract ALL information as JSON:\n\n${fileText.substring(0, 6000)}`
           }
         ],
         temperature: 0.1,
-        max_tokens: 1000
+        max_tokens: 2000
       }),
     })
 
@@ -178,16 +194,18 @@ serve(async (req) => {
       )
     }
 
-    // Parse the JSON response with better error handling
+    // Enhanced JSON parsing with better error handling
     let parsedData
     try {
-      // Clean the response more aggressively
+      // More aggressive cleaning of the response
       let cleanedContent = parsedContent.trim()
       
-      // Remove markdown code blocks if present
+      // Remove any markdown formatting
       cleanedContent = cleanedContent.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+      cleanedContent = cleanedContent.replace(/^[^{]*/, '') // Remove everything before first {
+      cleanedContent = cleanedContent.replace(/[^}]*$/, '}') // Remove everything after last }
       
-      // Find JSON object boundaries
+      // Find JSON object boundaries more precisely
       const jsonStart = cleanedContent.indexOf('{')
       const jsonEnd = cleanedContent.lastIndexOf('}')
       
@@ -195,28 +213,25 @@ serve(async (req) => {
         cleanedContent = cleanedContent.substring(jsonStart, jsonEnd + 1)
       }
       
-      console.log('Attempting to parse cleaned content:', cleanedContent.substring(0, 200))
+      console.log('Attempting to parse cleaned content:', cleanedContent.substring(0, 300))
       parsedData = JSON.parse(cleanedContent)
       console.log('Successfully parsed JSON:', parsedData)
+      
+      // Validate and enhance parsed data
+      parsedData = validateAndEnhanceParsedData(parsedData, fileText)
+      
     } catch (parseError) {
       console.error('Failed to parse JSON:', parseError)
       console.error('Raw content:', parsedContent)
       
-      // Create a fallback structure with extracted basic info
-      parsedData = {
-        full_name: extractName(fileText),
-        email: extractEmail(fileText),
-        phone: extractPhone(fileText),
-        location: extractLocation(fileText),
-        skills: extractSkills(fileText),
-        experience: [],
-        education: []
-      }
-      console.log('Using fallback parsing:', parsedData)
+      // Enhanced fallback parsing with better regex patterns
+      console.log('Using enhanced fallback parsing...')
+      parsedData = enhancedFallbackParsing(fileText)
+      console.log('Enhanced fallback parsing result:', parsedData)
     }
 
     // Clean the raw text content for database storage
-    const cleanRawText = fileText.substring(0, 5000)
+    const cleanRawText = fileText.substring(0, 8000)
       .replace(/\u0000/g, '') // Remove null bytes
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
       .replace(/\\/g, '\\\\') // Escape backslashes
@@ -278,45 +293,172 @@ serve(async (req) => {
   }
 })
 
-// Helper functions for fallback parsing
+// Enhanced validation and data enhancement function
+function validateAndEnhanceParsedData(data: any, originalText: string): any {
+  const result = {
+    full_name: data.full_name || extractName(originalText),
+    email: data.email || extractEmail(originalText),
+    phone: data.phone || extractPhone(originalText),
+    location: data.location || extractLocation(originalText),
+    skills: Array.isArray(data.skills) ? data.skills : extractSkills(originalText),
+    experience: Array.isArray(data.experience) ? data.experience : extractExperience(originalText),
+    education: Array.isArray(data.education) ? data.education : extractEducation(originalText)
+  }
+  
+  // Enhance skills if too few were found
+  if (result.skills.length < 3) {
+    const additionalSkills = extractSkills(originalText)
+    result.skills = [...new Set([...result.skills, ...additionalSkills])]
+  }
+  
+  return result
+}
+
+// Enhanced fallback parsing with comprehensive extraction
+function enhancedFallbackParsing(text: string): any {
+  return {
+    full_name: extractName(text),
+    email: extractEmail(text),
+    phone: extractPhone(text),
+    location: extractLocation(text),
+    skills: extractSkills(text),
+    experience: extractExperience(text),
+    education: extractEducation(text)
+  }
+}
+
+// Enhanced helper functions for better extraction
 function extractName(text: string): string | null {
-  const lines = text.split('\n').slice(0, 10)
+  const lines = text.split('\n').slice(0, 15)
+  
   for (const line of lines) {
     const trimmed = line.trim()
-    if (trimmed && /^[A-Z][a-z]+ [A-Z][a-z]+/.test(trimmed) && trimmed.length < 50) {
+    // Look for name patterns (proper case, 2-4 words, no numbers/symbols)
+    if (trimmed && 
+        /^[A-Z][a-z]+(?: [A-Z][a-z]+){1,3}$/.test(trimmed) && 
+        trimmed.length < 60 &&
+        !trimmed.toLowerCase().includes('resume') &&
+        !trimmed.toLowerCase().includes('cv') &&
+        !trimmed.toLowerCase().includes('curriculum')) {
       return trimmed
     }
   }
-  return null
+  
+  // Fallback: look for name after "Name:" or similar
+  const nameMatch = text.match(/(?:Name|Full Name):\s*([A-Z][a-z]+(?: [A-Z][a-z]+)+)/i)
+  return nameMatch ? nameMatch[1] : null
 }
 
 function extractEmail(text: string): string | null {
-  const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/
-  const match = text.match(emailRegex)
-  return match ? match[0] : null
+  const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g
+  const matches = text.match(emailRegex)
+  return matches ? matches[0] : null
 }
 
 function extractPhone(text: string): string | null {
-  const phoneRegex = /(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/
+  const phoneRegex = /(?:\+?1[-.\s]?)?\(?([0-9]{3})\)?[-.\s]?([0-9]{3})[-.\s]?([0-9]{4})/g
   const match = text.match(phoneRegex)
   return match ? match[0] : null
 }
 
 function extractLocation(text: string): string | null {
-  const locationRegex = /\b[A-Z][a-z]+,\s*[A-Z][a-z]+\b/
-  const match = text.match(locationRegex)
-  return match ? match[0] : null
+  // Look for city, state patterns
+  const locationRegex = /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),\s*([A-Z]{2}|[A-Z][a-z]+)\b/g
+  const matches = text.match(locationRegex)
+  if (matches) return matches[0]
+  
+  // Look for just city names near address indicators
+  const cityMatch = text.match(/(?:Address|Location|City):\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)/i)
+  return cityMatch ? cityMatch[1] : null
 }
 
 function extractSkills(text: string): string[] {
-  const skillKeywords = ['javascript', 'python', 'java', 'react', 'node', 'sql', 'html', 'css', 'git', 'docker', 'aws', 'typescript']
+  const skillKeywords = [
+    // Programming Languages
+    'javascript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'go', 'rust', 'swift', 'kotlin', 'typescript',
+    // Frameworks & Libraries
+    'react', 'angular', 'vue', 'node.js', 'express', 'django', 'flask', 'spring', 'laravel', 'rails',
+    // Databases
+    'mysql', 'postgresql', 'mongodb', 'redis', 'sqlite', 'oracle', 'sql server',
+    // Cloud & DevOps
+    'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'jenkins', 'git', 'github', 'gitlab',
+    // Web Technologies
+    'html', 'css', 'sass', 'less', 'webpack', 'babel', 'jquery', 'bootstrap', 'tailwind',
+    // Tools & Software
+    'jira', 'confluence', 'slack', 'figma', 'photoshop', 'illustrator',
+    // Methodologies
+    'agile', 'scrum', 'kanban', 'devops', 'ci/cd', 'tdd', 'bdd'
+  ]
+  
   const skills: string[] = []
+  const lowerText = text.toLowerCase()
+  
+  // Extract from skills section
+  const skillsSection = text.match(/(?:Skills?|Technical Skills?|Core Competencies)[\s\S]*?(?=\n[A-Z]|\n\n|$)/i)
+  const skillsText = skillsSection ? skillsSection[0] : text
   
   skillKeywords.forEach(skill => {
-    if (text.toLowerCase().includes(skill)) {
+    if (lowerText.includes(skill.toLowerCase())) {
       skills.push(skill.charAt(0).toUpperCase() + skill.slice(1))
     }
   })
   
-  return skills
+  // Extract skills from bullet points or comma-separated lists
+  const skillMatches = skillsText.match(/(?:•|·|\*|-)\s*([A-Za-z][A-Za-z\s.+#]{1,25})/g)
+  if (skillMatches) {
+    skillMatches.forEach(match => {
+      const skill = match.replace(/^(?:•|·|\*|-)\s*/, '').trim()
+      if (skill.length > 2 && skill.length < 30) {
+        skills.push(skill)
+      }
+    })
+  }
+  
+  return [...new Set(skills)].slice(0, 20) // Remove duplicates and limit
+}
+
+function extractExperience(text: string): any[] {
+  const experience: any[] = []
+  
+  // Look for work experience patterns
+  const experienceSection = text.match(/(?:Experience|Work Experience|Professional Experience)[\s\S]*?(?=\n(?:Education|Skills|Projects)|$)/i)
+  const expText = experienceSection ? experienceSection[0] : text
+  
+  // Pattern for job entries: Company, Title, Dates
+  const jobPattern = /([A-Z][A-Za-z\s&.,]+?)\s*(?:\n|\s{2,})\s*([A-Z][A-Za-z\s]+?)\s*(?:\n|\s{2,})\s*(\d{4}[\s\-–to]*\d{0,4}|\w+\s+\d{4}[\s\-–to]*\w*\s*\d{0,4})/g
+  
+  let match
+  while ((match = jobPattern.exec(expText)) !== null && experience.length < 5) {
+    experience.push({
+      company: match[1].trim(),
+      position: match[2].trim(),
+      duration: match[3].trim(),
+      description: "Work experience details"
+    })
+  }
+  
+  return experience
+}
+
+function extractEducation(text: string): any[] {
+  const education: any[] = []
+  
+  // Look for education section
+  const educationSection = text.match(/(?:Education|Academic Background)[\s\S]*?(?=\n(?:Experience|Skills|Projects)|$)/i)
+  const eduText = educationSection ? educationSection[0] : text
+  
+  // Pattern for education: Degree, Institution, Year
+  const degreePattern = /(Bachelor|Master|PhD|B\.S\.|M\.S\.|B\.A\.|M\.A\.|Associate)[A-Za-z\s,.]*(University|College|Institute|School)[A-Za-z\s,]*(\d{4})/gi
+  
+  let match
+  while ((match = degreePattern.exec(eduText)) !== null && education.length < 3) {
+    education.push({
+      degree: match[1],
+      institution: match[2],
+      year: match[3],
+      field: "Field of study"
+    })
+  }
+  
+  return education
 }
