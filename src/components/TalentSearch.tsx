@@ -21,6 +21,94 @@ interface ParsedCandidate {
   resume_file_name: string;
 }
 
+// Mock data for demonstration
+const mockCandidates: ParsedCandidate[] = [
+  {
+    id: "mock-1",
+    full_name: "John Doe",
+    email: "john.doe@example.com",
+    phone: "+1 234 567 8900",
+    location: "San Francisco, CA",
+    skills_json: ["React", "TypeScript", "Node.js", "Python", "AWS"],
+    experience_json: [
+      {
+        company: "Tech Corp",
+        position: "Senior Software Engineer",
+        duration: "2020-2023",
+        description: "Led development of web applications"
+      },
+      {
+        company: "StartupXYZ",
+        position: "Full Stack Developer",
+        duration: "2018-2020",
+        description: "Built scalable web solutions"
+      }
+    ],
+    education_json: [
+      {
+        degree: "Master of Science",
+        institution: "Stanford University",
+        field: "Computer Science",
+        year: "2016-2018",
+        grade: "3.8 GPA"
+      }
+    ],
+    resume_file_name: "john_doe_resume.pdf"
+  },
+  {
+    id: "mock-2",
+    full_name: "Sarah Johnson",
+    email: "sarah.johnson@example.com",
+    phone: "+1 987 654 3210",
+    location: "New York, NY",
+    skills_json: ["Product Management", "Agile", "Scrum", "Analytics", "Leadership"],
+    experience_json: [
+      {
+        company: "Global Inc",
+        position: "Senior Product Manager",
+        duration: "2019-2023",
+        description: "Managed product roadmap for 5M+ users"
+      }
+    ],
+    education_json: [
+      {
+        degree: "MBA",
+        institution: "Harvard Business School",
+        field: "Business Administration",
+        year: "2015-2017",
+        grade: "Magna Cum Laude"
+      }
+    ],
+    resume_file_name: "sarah_johnson_resume.pdf"
+  },
+  {
+    id: "mock-3",
+    full_name: "Michael Chen",
+    email: "michael.chen@example.com",
+    phone: "+1 555 123 4567",
+    location: "Seattle, WA",
+    skills_json: ["Data Science", "Machine Learning", "Python", "SQL", "TensorFlow"],
+    experience_json: [
+      {
+        company: "Data Analytics Co",
+        position: "Data Scientist",
+        duration: "2021-2023",
+        description: "Built ML models for customer analytics"
+      }
+    ],
+    education_json: [
+      {
+        degree: "PhD",
+        institution: "MIT",
+        field: "Data Science",
+        year: "2017-2021",
+        grade: "4.0 GPA"
+      }
+    ],
+    resume_file_name: "michael_chen_resume.pdf"
+  }
+];
+
 const TalentSearch = () => {
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
@@ -66,14 +154,19 @@ const TalentSearch = () => {
         email: candidate.email,
         phone: candidate.phone,
         location: candidate.location,
-        skills_json: Array.isArray(candidate.skills_json) ? candidate.skills_json : [],
+        skills_json: Array.isArray(candidate.skills_json) ? 
+          candidate.skills_json.map(skill => String(skill)) : [],
         experience_json: Array.isArray(candidate.experience_json) ? candidate.experience_json : [],
         education_json: Array.isArray(candidate.education_json) ? candidate.education_json : [],
         resume_file_name: (candidate as any).resumes?.file_name || 'Resume'
       })) || [];
 
       console.log('Fetched candidates:', candidates);
-      setAllCandidates(candidates);
+      
+      // Combine real candidates with mock data
+      const combinedCandidates = [...candidates, ...mockCandidates];
+      setAllCandidates(combinedCandidates);
+      setSearchResults(combinedCandidates); // Show all candidates initially
     } catch (error) {
       console.error('Error in fetchAllCandidates:', error);
     }
@@ -81,10 +174,10 @@ const TalentSearch = () => {
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
+      setSearchResults(allCandidates);
       toast({
-        title: "Please enter a search query",
-        description: "Describe the type of candidate you're looking for.",
-        variant: "destructive"
+        title: "Showing all candidates",
+        description: `Displaying ${allCandidates.length} candidates from your talent pool.`,
       });
       return;
     }
@@ -229,7 +322,7 @@ Best regards,
             <span>AI-Powered Talent Search</span>
           </CardTitle>
           <CardDescription>
-            Search through your parsed resumes. Try queries like "Python developer", "Hyderabad", "Machine Learning", or "5 years experience".
+            Search through your parsed resumes and demo candidates. Try queries like "Python developer", "San Francisco", "Machine Learning", or "5 years experience".
             {allCandidates.length > 0 && (
               <span className="block mt-2 text-sm font-medium text-blue-600">
                 {allCandidates.length} candidates available in your talent pool
@@ -248,7 +341,7 @@ Best regards,
             />
             <Button 
               onClick={handleSearch}
-              disabled={isSearching || allCandidates.length === 0}
+              disabled={isSearching}
               className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
             >
               {isSearching ? (
@@ -261,18 +354,6 @@ Best regards,
           </div>
         </CardContent>
       </Card>
-
-      {allCandidates.length === 0 && (
-        <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
-          <CardContent className="p-8 text-center">
-            <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-800 mb-2">No candidates in your talent pool</h3>
-            <p className="text-gray-600">
-              Upload and parse some resumes first to start searching for candidates.
-            </p>
-          </CardContent>
-        </Card>
-      )}
 
       {searchResults.length > 0 && (
         <div className="space-y-4">
@@ -293,8 +374,8 @@ Best regards,
                       <p className="text-blue-600 font-medium">{getDisplayTitle(candidate)}</p>
                     </div>
                   </div>
-                  <Badge variant="secondary" className="bg-green-100 text-green-800">
-                    Parsed Resume
+                  <Badge variant="secondary" className={candidate.id.startsWith('mock-') ? "bg-orange-100 text-orange-800" : "bg-green-100 text-green-800"}>
+                    {candidate.id.startsWith('mock-') ? 'Demo Candidate' : 'Parsed Resume'}
                   </Badge>
                 </div>
 
@@ -374,13 +455,13 @@ Best regards,
         </div>
       )}
 
-      {searchQuery && searchResults.length === 0 && !isSearching && allCandidates.length > 0 && (
+      {searchResults.length === 0 && !isSearching && (
         <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
           <CardContent className="p-8 text-center">
             <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-800 mb-2">No candidates found</h3>
             <p className="text-gray-600">
-              Try adjusting your search criteria. You have {allCandidates.length} candidates in your talent pool.
+              Try adjusting your search criteria or upload more resumes to build your talent pool.
             </p>
           </CardContent>
         </Card>

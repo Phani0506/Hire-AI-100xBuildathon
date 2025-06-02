@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { FileText, User, MapPin, Briefcase, Mail, Search, Eye } from "lucide-react";
+import { FileText, User, MapPin, Briefcase, Mail, Search, Eye, Trash2, Send } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
@@ -98,6 +98,89 @@ const ResumeList = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDelete = async (resumeId: string, fileName: string) => {
+    if (!confirm(`Are you sure you want to delete "${fileName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      // Delete parsed details first (due to foreign key constraint)
+      const { error: parsedDetailsError } = await supabase
+        .from('parsed_resume_details')
+        .delete()
+        .eq('resume_id', resumeId);
+
+      if (parsedDetailsError) {
+        console.error('Error deleting parsed details:', parsedDetailsError);
+      }
+
+      // Delete the resume record
+      const { error: resumeError } = await supabase
+        .from('resumes')
+        .delete()
+        .eq('id', resumeId);
+
+      if (resumeError) {
+        console.error('Error deleting resume:', resumeError);
+        toast({
+          title: "Error",
+          description: "Failed to delete resume. Please try again.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Remove from local state
+      setResumes(resumes.filter(resume => resume.id !== resumeId));
+      
+      toast({
+        title: "Resume deleted",
+        description: `"${fileName}" has been deleted successfully.`,
+      });
+    } catch (error) {
+      console.error('Error in handleDelete:', error);
+      toast({
+        title: "Error",
+        description: "An unexpected error occurred while deleting the resume.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const handleOutreach = (resume: ResumeWithDetails) => {
+    const email = resume.parsed_details?.email;
+    const candidateName = resume.parsed_details?.full_name;
+
+    if (!email) {
+      toast({
+        title: "No email found",
+        description: "This candidate doesn't have an email address in their resume.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const subject = encodeURIComponent(`Opportunity Discussion - ${candidateName || 'Candidate'}`);
+    const body = encodeURIComponent(`Hi ${candidateName || 'there'},
+
+I came across your profile and was impressed by your background.
+
+I would love to discuss some exciting opportunities that might be a great fit for your experience.
+
+Would you be available for a brief conversation this week?
+
+Best regards,
+[Your Name]`);
+
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${email}&su=${subject}&body=${body}`;
+    window.open(gmailUrl, '_blank');
+
+    toast({
+      title: "Opening Gmail",
+      description: `Composing email to ${candidateName || 'candidate'}`,
+    });
   };
 
   const filteredResumes = resumes.filter(resume => {
@@ -291,13 +374,35 @@ const ResumeList = () => {
                 </div>
               )}
 
-              <div className="flex justify-between items-center text-sm text-gray-600">
-                <div className="flex items-center space-x-2">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
                   <FileText className="w-4 h-4" />
                   <span>{resume.file_name}</span>
                   <span>({formatFileSize(resume.file_size)})</span>
+                  <span>• Uploaded {formatDate(resume.uploaded_at)}</span>
                 </div>
-                <span>Uploaded {formatDate(resume.uploaded_at)}</span>
+                
+                <div className="flex space-x-2">
+                  <Button 
+                    onClick={() => handleOutreach(resume)}
+                    size="sm"
+                    variant="outline"
+                    disabled={!resume.parsed_details?.email}
+                    className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                  >
+                    <Send className="w-4 h-4 mr-1" />
+                    Outreach
+                  </Button>
+                  <Button 
+                    onClick={() => handleDelete(resume.id, resume.file_name)}
+                    size="sm"
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    Delete
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
