@@ -115,6 +115,7 @@ const TalentSearch = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<ParsedCandidate[]>([]);
   const [allCandidates, setAllCandidates] = useState<ParsedCandidate[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -166,7 +167,6 @@ const TalentSearch = () => {
       // Combine real candidates with mock data
       const combinedCandidates = [...candidates, ...mockCandidates];
       setAllCandidates(combinedCandidates);
-      setSearchResults(combinedCandidates); // Show all candidates initially
     } catch (error) {
       console.error('Error in fetchAllCandidates:', error);
     }
@@ -175,6 +175,7 @@ const TalentSearch = () => {
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
       setSearchResults(allCandidates);
+      setHasSearched(true);
       toast({
         title: "Showing all candidates",
         description: `Displaying ${allCandidates.length} candidates from your talent pool.`,
@@ -227,6 +228,7 @@ const TalentSearch = () => {
       });
 
       setSearchResults(filtered);
+      setHasSearched(true);
       setIsSearching(false);
 
       toast({
@@ -355,7 +357,7 @@ Best regards,
         </CardContent>
       </Card>
 
-      {searchResults.length > 0 && (
+      {hasSearched && searchResults.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-lg font-semibold text-gray-800">
             Search Results ({searchResults.length} candidates)
@@ -455,13 +457,25 @@ Best regards,
         </div>
       )}
 
-      {searchResults.length === 0 && !isSearching && (
+      {hasSearched && searchResults.length === 0 && !isSearching && (
         <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
           <CardContent className="p-8 text-center">
             <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-800 mb-2">No candidates found</h3>
             <p className="text-gray-600">
               Try adjusting your search criteria or upload more resumes to build your talent pool.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {!hasSearched && (
+        <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
+          <CardContent className="p-8 text-center">
+            <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-800 mb-2">Ready to search</h3>
+            <p className="text-gray-600">
+              Enter your search criteria above to find candidates from your talent pool.
             </p>
           </CardContent>
         </Card>
