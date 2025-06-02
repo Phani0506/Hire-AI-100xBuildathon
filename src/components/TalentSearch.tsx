@@ -1,56 +1,83 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Search, User, MapPin, Briefcase, Mail, Phone } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
+
+interface ParsedCandidate {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  phone: string | null;
+  location: string | null;
+  skills_json: string[];
+  experience_json: any[];
+  education_json: any[];
+  resume_file_name: string;
+}
 
 const TalentSearch = () => {
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<ParsedCandidate[]>([]);
+  const [allCandidates, setAllCandidates] = useState<ParsedCandidate[]>([]);
 
-  // Mock candidate data
-  const mockCandidates = [
-    {
-      id: 1,
-      name: "Sarah Johnson",
-      email: "sarah.johnson@email.com",
-      phone: "+1 (555) 123-4567",
-      location: "Hyderabad, India",
-      title: "Full Stack Developer",
-      experience: "5 years",
-      skills: ["Python", "React", "AWS", "Django", "PostgreSQL"],
-      summary: "Experienced full-stack developer with expertise in Python and React.",
-      matchScore: 95
-    },
-    {
-      id: 2,
-      name: "Michael Chen",
-      email: "michael.chen@email.com",
-      phone: "+1 (555) 987-6543",
-      location: "Bangalore, India",
-      title: "Cloud Solutions Architect",
-      experience: "7 years",
-      skills: ["AWS", "Azure", "Python", "Kubernetes", "Terraform"],
-      summary: "Senior cloud architect with extensive experience in AWS and Azure.",
-      matchScore: 88
-    },
-    {
-      id: 3,
-      name: "Priya Sharma",
-      email: "priya.sharma@email.com",
-      phone: "+91 98765 43210",
-      location: "Hyderabad, India",
-      title: "DevOps Engineer",
-      experience: "4 years",
-      skills: ["Docker", "Kubernetes", "Python", "Jenkins", "AWS"],
-      summary: "DevOps specialist focused on automation and cloud infrastructure.",
-      matchScore: 82
+  useEffect(() => {
+    if (user) {
+      fetchAllCandidates();
     }
-  ];
+  }, [user]);
+
+  const fetchAllCandidates = async () => {
+    if (!user) return;
+
+    try {
+      console.log('Fetching parsed candidates for user:', user.id);
+      
+      const { data, error } = await supabase
+        .from('parsed_resume_details')
+        .select(`
+          id,
+          full_name,
+          email,
+          phone,
+          location,
+          skills_json,
+          experience_json,
+          education_json,
+          resumes!inner(file_name)
+        `)
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Error fetching candidates:', error);
+        return;
+      }
+
+      const candidates = data?.map(candidate => ({
+        id: candidate.id,
+        full_name: candidate.full_name,
+        email: candidate.email,
+        phone: candidate.phone,
+        location: candidate.location,
+        skills_json: Array.isArray(candidate.skills_json) ? candidate.skills_json : [],
+        experience_json: Array.isArray(candidate.experience_json) ? candidate.experience_json : [],
+        education_json: Array.isArray(candidate.education_json) ? candidate.education_json : [],
+        resume_file_name: (candidate as any).resumes?.file_name || 'Resume'
+      })) || [];
+
+      console.log('Fetched candidates:', candidates);
+      setAllCandidates(candidates);
+    } catch (error) {
+      console.error('Error in fetchAllCandidates:', error);
+    }
+  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
@@ -64,40 +91,134 @@ const TalentSearch = () => {
 
     setIsSearching(true);
 
-    // Mock search delay
+    // Mock search delay for better UX
     setTimeout(() => {
-      // Filter mock candidates based on query
-      const filtered = mockCandidates.filter(candidate => 
-        searchQuery.toLowerCase().includes('python') && candidate.skills.includes('Python') ||
-        searchQuery.toLowerCase().includes('hyderabad') && candidate.location.includes('Hyderabad') ||
-        searchQuery.toLowerCase().includes('full stack') && candidate.title.includes('Full Stack') ||
-        searchQuery.toLowerCase().includes('cloud') && candidate.title.includes('Cloud')
-      );
+      const query = searchQuery.toLowerCase();
+      
+      const filtered = allCandidates.filter(candidate => {
+        // Search in name
+        if (candidate.full_name && candidate.full_name.toLowerCase().includes(query)) {
+          return true;
+        }
+        
+        // Search in location
+        if (candidate.location && candidate.location.toLowerCase().includes(query)) {
+          return true;
+        }
+        
+        // Search in skills
+        if (candidate.skills_json && candidate.skills_json.some(skill => 
+          skill.toLowerCase().includes(query)
+        )) {
+          return true;
+        }
+        
+        // Search in experience
+        if (candidate.experience_json && candidate.experience_json.some(exp => 
+          (exp.company && exp.company.toLowerCase().includes(query)) ||
+          (exp.position && exp.position.toLowerCase().includes(query))
+        )) {
+          return true;
+        }
+        
+        // Search in education
+        if (candidate.education_json && candidate.education_json.some(edu => 
+          (edu.degree && edu.degree.toLowerCase().includes(query)) ||
+          (edu.institution && edu.institution.toLowerCase().includes(query)) ||
+          (edu.field && edu.field.toLowerCase().includes(query))
+        )) {
+          return true;
+        }
+        
+        return false;
+      });
 
-      setSearchResults(filtered.length > 0 ? filtered : mockCandidates.slice(0, 2));
+      setSearchResults(filtered);
       setIsSearching(false);
 
       toast({
         title: "Search completed",
-        description: `Found ${filtered.length > 0 ? filtered.length : 2} matching candidates.`,
+        description: `Found ${filtered.length} matching candidates.`,
       });
-    }, 1500);
+    }, 1000);
   };
 
-  const generateQuestions = (candidate: any) => {
+  const handleOutreach = (candidate: ParsedCandidate) => {
+    if (!candidate.email) {
+      toast({
+        title: "No email found",
+        description: "This candidate doesn't have an email address in their resume.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const subject = encodeURIComponent(`Opportunity Discussion - ${candidate.full_name || 'Candidate'}`);
+    const body = encodeURIComponent(`Hi ${candidate.full_name || 'there'},
+
+I came across your profile and was impressed by your background in ${candidate.skills_json?.slice(0, 3).join(', ') || 'your field'}.
+
+I would love to discuss some exciting opportunities that might be a great fit for your experience.
+
+Would you be available for a brief conversation this week?
+
+Best regards,
+[Your Name]`);
+
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${candidate.email}&su=${subject}&body=${body}`;
+    window.open(gmailUrl, '_blank');
+
+    toast({
+      title: "Opening Gmail",
+      description: `Composing email to ${candidate.full_name || 'candidate'}`,
+    });
+  };
+
+  const generateQuestions = (candidate: ParsedCandidate) => {
     toast({
       title: "Generating screening questions",
-      description: `Creating AI-powered questions for ${candidate.name}...`,
+      description: `Creating AI-powered questions for ${candidate.full_name || 'candidate'}...`,
     });
     
-    // This will be replaced with actual Groq API integration
+    // This will be replaced with actual AI question generation
     setTimeout(() => {
       toast({
         title: "Questions generated",
-        description: `5 screening questions created for ${candidate.name}.`,
+        description: `5 screening questions created for ${candidate.full_name || 'candidate'}.`,
       });
     }, 2000);
   };
+
+  const calculateExperience = (experience_json: any[]) => {
+    if (!experience_json || experience_json.length === 0) return "Entry level";
+    return `${experience_json.length * 2}+ years`;
+  };
+
+  const getDisplayName = (candidate: ParsedCandidate) => {
+    return candidate.full_name || `Candidate from ${candidate.resume_file_name}`;
+  };
+
+  const getDisplayTitle = (candidate: ParsedCandidate) => {
+    if (candidate.experience_json && candidate.experience_json.length > 0) {
+      return candidate.experience_json[0].position || "Professional";
+    }
+    if (candidate.education_json && candidate.education_json.length > 0) {
+      return `${candidate.education_json[0].degree || 'Graduate'} - ${candidate.education_json[0].field || 'Various Fields'}`;
+    }
+    return "Professional";
+  };
+
+  if (!user) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
+          <CardContent className="p-8 text-center">
+            <p className="text-gray-600">Please log in to search for talent.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -108,13 +229,18 @@ const TalentSearch = () => {
             <span>AI-Powered Talent Search</span>
           </CardTitle>
           <CardDescription>
-            Use natural language to find candidates. Try queries like "Full stack developer in Hyderabad with Python experience" or "Cloud engineer with AWS certification".
+            Search through your parsed resumes. Try queries like "Python developer", "Hyderabad", "Machine Learning", or "5 years experience".
+            {allCandidates.length > 0 && (
+              <span className="block mt-2 text-sm font-medium text-blue-600">
+                {allCandidates.length} candidates available in your talent pool
+              </span>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex space-x-2">
             <Input
-              placeholder="Describe your ideal candidate..."
+              placeholder="Search for candidates by skills, location, experience..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
@@ -122,7 +248,7 @@ const TalentSearch = () => {
             />
             <Button 
               onClick={handleSearch}
-              disabled={isSearching}
+              disabled={isSearching || allCandidates.length === 0}
               className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
             >
               {isSearching ? (
@@ -135,6 +261,18 @@ const TalentSearch = () => {
           </div>
         </CardContent>
       </Card>
+
+      {allCandidates.length === 0 && (
+        <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
+          <CardContent className="p-8 text-center">
+            <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-800 mb-2">No candidates in your talent pool</h3>
+            <p className="text-gray-600">
+              Upload and parse some resumes first to start searching for candidates.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {searchResults.length > 0 && (
         <div className="space-y-4">
@@ -151,46 +289,67 @@ const TalentSearch = () => {
                       <User className="w-6 h-6 text-white" />
                     </div>
                     <div>
-                      <h4 className="text-xl font-semibold text-gray-800">{candidate.name}</h4>
-                      <p className="text-blue-600 font-medium">{candidate.title}</p>
+                      <h4 className="text-xl font-semibold text-gray-800">{getDisplayName(candidate)}</h4>
+                      <p className="text-blue-600 font-medium">{getDisplayTitle(candidate)}</p>
                     </div>
                   </div>
                   <Badge variant="secondary" className="bg-green-100 text-green-800">
-                    {candidate.matchScore}% Match
+                    Parsed Resume
                   </Badge>
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-4 mb-4">
-                  <div className="flex items-center space-x-2 text-gray-600">
-                    <Mail className="w-4 h-4" />
-                    <span className="text-sm">{candidate.email}</span>
-                  </div>
-                  <div className="flex items-center space-x-2 text-gray-600">
-                    <Phone className="w-4 h-4" />
-                    <span className="text-sm">{candidate.phone}</span>
-                  </div>
-                  <div className="flex items-center space-x-2 text-gray-600">
-                    <MapPin className="w-4 h-4" />
-                    <span className="text-sm">{candidate.location}</span>
-                  </div>
+                  {candidate.email && (
+                    <div className="flex items-center space-x-2 text-gray-600">
+                      <Mail className="w-4 h-4" />
+                      <span className="text-sm">{candidate.email}</span>
+                    </div>
+                  )}
+                  {candidate.phone && (
+                    <div className="flex items-center space-x-2 text-gray-600">
+                      <Phone className="w-4 h-4" />
+                      <span className="text-sm">{candidate.phone}</span>
+                    </div>
+                  )}
+                  {candidate.location && (
+                    <div className="flex items-center space-x-2 text-gray-600">
+                      <MapPin className="w-4 h-4" />
+                      <span className="text-sm">{candidate.location}</span>
+                    </div>
+                  )}
                   <div className="flex items-center space-x-2 text-gray-600">
                     <Briefcase className="w-4 h-4" />
-                    <span className="text-sm">{candidate.experience} experience</span>
+                    <span className="text-sm">{calculateExperience(candidate.experience_json)} experience</span>
                   </div>
                 </div>
 
-                <p className="text-gray-700 mb-4">{candidate.summary}</p>
-
-                <div className="mb-4">
-                  <p className="text-sm font-medium text-gray-700 mb-2">Skills:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {candidate.skills.map((skill, index) => (
-                      <Badge key={index} variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-                        {skill}
-                      </Badge>
-                    ))}
+                {candidate.experience_json && candidate.experience_json.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Latest Experience:</p>
+                    <p className="text-gray-700 text-sm">
+                      {candidate.experience_json[0].position} at {candidate.experience_json[0].company}
+                      {candidate.experience_json[0].duration && ` (${candidate.experience_json[0].duration})`}
+                    </p>
                   </div>
-                </div>
+                )}
+
+                {candidate.skills_json && candidate.skills_json.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Skills:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {candidate.skills_json.slice(0, 10).map((skill, index) => (
+                        <Badge key={index} variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                          {skill}
+                        </Badge>
+                      ))}
+                      {candidate.skills_json.length > 10 && (
+                        <Badge variant="outline" className="bg-gray-50 text-gray-700 border-gray-200">
+                          +{candidate.skills_json.length - 10} more
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex space-x-2">
                   <Button 
@@ -201,10 +360,12 @@ const TalentSearch = () => {
                     Generate Questions
                   </Button>
                   <Button 
+                    onClick={() => handleOutreach(candidate)}
                     size="sm"
                     className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+                    disabled={!candidate.email}
                   >
-                    Contact Candidate
+                    Outreach via Gmail
                   </Button>
                 </div>
               </CardContent>
@@ -213,13 +374,13 @@ const TalentSearch = () => {
         </div>
       )}
 
-      {searchResults.length === 0 && searchQuery && !isSearching && (
+      {searchQuery && searchResults.length === 0 && !isSearching && allCandidates.length > 0 && (
         <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
           <CardContent className="p-8 text-center">
             <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-800 mb-2">No candidates found</h3>
             <p className="text-gray-600">
-              Try adjusting your search criteria or upload more resumes to expand your talent pool.
+              Try adjusting your search criteria. You have {allCandidates.length} candidates in your talent pool.
             </p>
           </CardContent>
         </Card>
