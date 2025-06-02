@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,6 +14,7 @@ interface ResumeWithDetails {
   file_size: number | null;
   uploaded_at: string;
   parsing_status: string | null;
+  supabase_storage_path?: string | null;
   parsed_details?: {
     full_name: string | null;
     email: string | null;
@@ -83,6 +83,7 @@ const ResumeList = () => {
         file_size: resume.file_size,
         uploaded_at: resume.uploaded_at,
         parsing_status: resume.parsing_status,
+        supabase_storage_path: resume.supabase_storage_path,
         parsed_details: resume.parsed_resume_details?.[0] || undefined
       })) || [];
 
@@ -97,6 +98,35 @@ const ResumeList = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleView = async (resume: ResumeWithDetails) => {
+    try {
+      const { data, error } = await supabase.storage
+        .from('resumes')
+        .createSignedUrl(resume.supabase_storage_path || `${resume.id}/${resume.file_name}`, 3600);
+      
+      if (error) {
+        console.error('Error creating signed URL:', error);
+        toast({
+          title: "Error",
+          description: "Could not load resume for viewing.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      if (data?.signedUrl) {
+        window.open(data.signedUrl, '_blank');
+      }
+    } catch (error) {
+      console.error('Error viewing resume:', error);
+      toast({
+        title: "Error",
+        description: "An unexpected error occurred while viewing the resume.",
+        variant: "destructive"
+      });
     }
   };
 
@@ -328,7 +358,12 @@ Best regards,
                      resume.parsing_status === 'processing' ? 'Processing' :
                      resume.parsing_status === 'failed' ? 'Failed' : 'Pending'}
                   </Badge>
-                  <Button variant="outline" size="sm">
+                  <Button 
+                    onClick={() => handleView(resume)}
+                    size="sm"
+                    variant="outline"
+                    className="text-green-600 border-green-200 hover:bg-green-50"
+                  >
                     <Eye className="w-4 h-4 mr-1" />
                     View
                   </Button>
@@ -383,6 +418,15 @@ Best regards,
                 </div>
                 
                 <div className="flex space-x-2">
+                  <Button 
+                    onClick={() => handleView(resume)}
+                    size="sm"
+                    variant="outline"
+                    className="text-green-600 border-green-200 hover:bg-green-50"
+                  >
+                    <Eye className="w-4 h-4 mr-1" />
+                    View
+                  </Button>
                   <Button 
                     onClick={() => handleOutreach(resume)}
                     size="sm"

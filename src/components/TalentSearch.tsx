@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +18,7 @@ interface ParsedCandidate {
   experience_json: any[];
   education_json: any[];
   resume_file_name: string;
+  relevanceScore?: number;
 }
 
 // Mock data for demonstration
@@ -172,23 +172,88 @@ const TalentSearch = () => {
     }
   };
 
+  // Enhanced ranking algorithm
+  const calculateRelevanceScore = (candidate: ParsedCandidate, query: string): number => {
+    if (!query.trim()) return 0;
+    
+    const queryTerms = query.toLowerCase().split(' ').filter(term => term.length > 2);
+    let score = 0;
+    
+    // Name match (high weight)
+    if (candidate.full_name) {
+      queryTerms.forEach(term => {
+        if (candidate.full_name!.toLowerCase().includes(term)) {
+          score += 20;
+        }
+      });
+    }
+    
+    // Skills match (very high weight)
+    if (candidate.skills_json && candidate.skills_json.length > 0) {
+      queryTerms.forEach(term => {
+        candidate.skills_json.forEach(skill => {
+          if (skill.toLowerCase().includes(term)) {
+            score += 15;
+          }
+        });
+      });
+    }
+    
+    // Experience match (high weight)
+    if (candidate.experience_json && candidate.experience_json.length > 0) {
+      queryTerms.forEach(term => {
+        candidate.experience_json.forEach(exp => {
+          if (exp.company && exp.company.toLowerCase().includes(term)) score += 10;
+          if (exp.position && exp.position.toLowerCase().includes(term)) score += 12;
+          if (exp.description && exp.description.toLowerCase().includes(term)) score += 5;
+        });
+      });
+      
+      // Bonus for more experience
+      score += candidate.experience_json.length * 2;
+    }
+    
+    // Education match (medium weight)
+    if (candidate.education_json && candidate.education_json.length > 0) {
+      queryTerms.forEach(term => {
+        candidate.education_json.forEach(edu => {
+          if (edu.degree && edu.degree.toLowerCase().includes(term)) score += 8;
+          if (edu.institution && edu.institution.toLowerCase().includes(term)) score += 6;
+          if (edu.field && edu.field.toLowerCase().includes(term)) score += 7;
+        });
+      });
+    }
+    
+    // Location match (medium weight)
+    if (candidate.location) {
+      queryTerms.forEach(term => {
+        if (candidate.location!.toLowerCase().includes(term)) {
+          score += 8;
+        }
+      });
+    }
+    
+    return score;
+  };
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
-      setSearchResults(allCandidates);
-      setHasSearched(true);
       toast({
-        title: "Showing all candidates",
-        description: `Displaying ${allCandidates.length} candidates from your talent pool.`,
+        title: "Please enter search criteria",
+        description: "Enter skills, location, or other criteria to search for candidates.",
+        variant: "destructive"
       });
       return;
     }
 
     setIsSearching(true);
+    setHasSearched(true);
 
-    // Mock search delay for better UX
+    // Simulate search delay for better UX
     setTimeout(() => {
       const query = searchQuery.toLowerCase();
       
+      // Filter candidates based on search criteria
       const filtered = allCandidates.filter(candidate => {
         // Search in name
         if (candidate.full_name && candidate.full_name.toLowerCase().includes(query)) {
@@ -210,7 +275,8 @@ const TalentSearch = () => {
         // Search in experience
         if (candidate.experience_json && candidate.experience_json.some(exp => 
           (exp.company && exp.company.toLowerCase().includes(query)) ||
-          (exp.position && exp.position.toLowerCase().includes(query))
+          (exp.position && exp.position.toLowerCase().includes(query)) ||
+          (exp.description && exp.description.toLowerCase().includes(query))
         )) {
           return true;
         }
@@ -227,13 +293,18 @@ const TalentSearch = () => {
         return false;
       });
 
-      setSearchResults(filtered);
-      setHasSearched(true);
+      // Calculate relevance scores and sort by relevance
+      const scoredResults = filtered.map(candidate => ({
+        ...candidate,
+        relevanceScore: calculateRelevanceScore(candidate, searchQuery)
+      })).sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+      setSearchResults(scoredResults);
       setIsSearching(false);
 
       toast({
         title: "Search completed",
-        description: `Found ${filtered.length} matching candidates.`,
+        description: `Found ${filtered.length} matching candidates, ranked by relevance.`,
       });
     }, 1000);
   };
@@ -303,6 +374,22 @@ Best regards,
     return "Professional";
   };
 
+  const getRelevanceLabel = (score: number): string => {
+    if (score >= 30) return "Excellent Match";
+    if (score >= 20) return "Very Good Match";
+    if (score >= 10) return "Good Match";
+    if (score >= 5) return "Fair Match";
+    return "Possible Match";
+  };
+
+  const getRelevanceColor = (score: number): string => {
+    if (score >= 30) return "bg-green-100 text-green-800";
+    if (score >= 20) return "bg-blue-100 text-blue-800";
+    if (score >= 10) return "bg-purple-100 text-purple-800";
+    if (score >= 5) return "bg-yellow-100 text-yellow-800";
+    return "bg-gray-100 text-gray-800";
+  };
+
   if (!user) {
     return (
       <div className="space-y-6">
@@ -324,7 +411,7 @@ Best regards,
             <span>AI-Powered Talent Search</span>
           </CardTitle>
           <CardDescription>
-            Search through your parsed resumes and demo candidates. Try queries like "Python developer", "San Francisco", "Machine Learning", or "5 years experience".
+            Search through your parsed resumes using AI-powered ranking. Try queries like "Python developer", "San Francisco", "Machine Learning", or "5 years experience".
             {allCandidates.length > 0 && (
               <span className="block mt-2 text-sm font-medium text-blue-600">
                 {allCandidates.length} candidates available in your talent pool
@@ -360,10 +447,10 @@ Best regards,
       {hasSearched && searchResults.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-lg font-semibold text-gray-800">
-            Search Results ({searchResults.length} candidates)
+            Search Results ({searchResults.length} candidates) - Ranked by Relevance
           </h3>
           
-          {searchResults.map((candidate) => (
+          {searchResults.map((candidate, index) => (
             <Card key={candidate.id} className="border-0 shadow-lg bg-white/60 backdrop-blur-sm hover:shadow-xl transition-all duration-300">
               <CardContent className="p-6">
                 <div className="flex justify-between items-start mb-4">
@@ -376,9 +463,16 @@ Best regards,
                       <p className="text-blue-600 font-medium">{getDisplayTitle(candidate)}</p>
                     </div>
                   </div>
-                  <Badge variant="secondary" className={candidate.id.startsWith('mock-') ? "bg-orange-100 text-orange-800" : "bg-green-100 text-green-800"}>
-                    {candidate.id.startsWith('mock-') ? 'Demo Candidate' : 'Parsed Resume'}
-                  </Badge>
+                  <div className="flex items-center space-x-2">
+                    <Badge 
+                      className={`${getRelevanceColor(candidate.relevanceScore || 0)}`}
+                    >
+                      #{index + 1} - {getRelevanceLabel(candidate.relevanceScore || 0)}
+                    </Badge>
+                    <Badge variant="secondary" className={candidate.id.startsWith('mock-') ? "bg-orange-100 text-orange-800" : "bg-green-100 text-green-800"}>
+                      {candidate.id.startsWith('mock-') ? 'Demo Candidate' : 'Parsed Resume'}
+                    </Badge>
+                  </div>
                 </div>
 
                 <div className="grid md:grid-cols-2 gap-4 mb-4">
@@ -475,7 +569,7 @@ Best regards,
             <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-800 mb-2">Ready to search</h3>
             <p className="text-gray-600">
-              Enter your search criteria above to find candidates from your talent pool.
+              Enter your search criteria above to find candidates from your talent pool with AI-powered relevance ranking.
             </p>
           </CardContent>
         </Card>
