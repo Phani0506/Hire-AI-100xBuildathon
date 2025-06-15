@@ -1,4 +1,3 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
@@ -90,7 +89,10 @@ serve(async (req) => {
       .from('resumes')
       .download(filePath);
 
-    if (downloadError) throw new Error(`Failed to download file: ${downloadError.message}`);
+    if (downloadError) {
+      console.error("Failed to download file:", downloadError);
+      throw new Error(`Failed to download file: ${downloadError.message}`);
+    }
 
     let extractedText = '';
     const fileExt = filePath.split('.').pop()?.toLowerCase();
@@ -101,49 +103,109 @@ serve(async (req) => {
     else if (fileExt === "doc") mimeType = "application/msword";
     else if (fileExt === "rtf") mimeType = "application/rtf";
     else if (fileExt === "odt") mimeType = "application/vnd.oasis.opendocument.text";
+    else mimeType = "application/octet-stream";
+
+    let attemptedOcr = false;
+    let base64File = '';
+    let textExtractionReason = '';
 
     if (fileExt === "pdf") {
-      // Try internal text extraction first
+      // 1. Try internal text extraction
       extractedText = await extractTextFromPDF(docBuffer);
 
-      // If little/no text, try OCR on the entire raw file using Hugging Face API
-      if (!/([a-zA-Z0-9\s.,@]){50,}/.test(extractedText)) {
-        console.log('Primary PDF text extraction too short/failed. Performing document OCR...');
-        const base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
-        let ocrText = await ocrDocument(base64File, mimeType);
-        ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
-        if (/([a-zA-Z0-9\s.,@]){50,}/.test(ocrText)) {
-          extractedText = ocrText;
-          console.log(`OCR extracted ${ocrText.length} characters from image-based PDF.`);
-        } else {
-          throw new Error('Text extraction failed: Resume appears to be unreadable or too empty even for OCR.');
+      // 1a. If internal extraction fails/few chars, always do OCR
+      if (!/([a-zA-Z0-9\s.,@]){30,}/.test(extractedText)) {
+        try {
+          attemptedOcr = true;
+          textExtractionReason = 'Primary PDF text extraction too short or failed. Performing document OCR...';
+          console.log(textExtractionReason);
+
+          base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
+          let ocrText = await ocrDocument(base64File, mimeType);
+          ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
+          if (/([a-zA-Z0-9\s.,@]){30,}/.test(ocrText)) {
+            extractedText = ocrText;
+            console.log(`[OCR] Extracted text: ${ocrText.length} chars.`);
+          } else {
+            throw new Error('Text extraction failed: Resume appears to be unreadable or too empty even for OCR.');
+          }
+        } catch (ocrErr) {
+          console.error("PDF OCR fallback failed:", ocrErr);
+          throw new Error(`PDF text extraction and OCR both failed: ${ocrErr.message}`);
         }
+      } else {
+        console.log(`[NativeText] Extracted text: ${extractedText.length} chars.`);
       }
-    } else if (fileExt === "txt") {
-      extractedText = await fileData.text();
     } else if (
       fileExt === "docx" ||
       fileExt === "doc" ||
       fileExt === "rtf" ||
       fileExt === "odt"
     ) {
-      // For other document types, try OCR as fallback
-      const base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
-      let ocrText = await ocrDocument(base64File, mimeType);
-      ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
-      if (/([a-zA-Z0-9\s.,@]){50,}/.test(ocrText)) {
-        extractedText = ocrText;
-        console.log(`OCR extracted ${ocrText.length} characters from document type: ${fileExt}`);
-      } else {
-        throw new Error('Text extraction failed: Document appears to be unreadable or too empty even for OCR.');
+      try {
+        // 2. Always do OCR for non-text files, since we can't parse DOCX directly in Deno
+        textExtractionReason = 'Performing OCR for document type: ' + fileExt;
+        console.log(textExtractionReason);
+        attemptedOcr = true;
+        base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
+        let ocrText = await ocrDocument(base64File, mimeType);
+        ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
+        if (/([a-zA-Z0-9\s.,@]){30,}/.test(ocrText)) {
+          extractedText = ocrText;
+          console.log(`[OCR] Extracted text: ${ocrText.length} chars from ${fileExt}.`);
+        } else {
+          throw new Error('Text extraction failed: Document appears unreadable even with OCR.');
+        }
+      } catch (ocrErr) {
+        console.error(`[${fileExt.toUpperCase()}] OCR failed:`, ocrErr);
+        throw new Error(`${fileExt.toUpperCase()} OCR and text extraction failed: ${ocrErr.message}`);
+      }
+    } else if (fileExt === "txt") {
+      try {
+        extractedText = await fileData.text();
+        if (!/([a-zA-Z0-9\s.,@]){30,}/.test(extractedText)) {
+          extractedText = '';
+          console.warn('Plaintext resume is too short to parse.');
+        }
+      } catch (txtErr) {
+        console.error("TXT extraction failed:", txtErr);
+        throw new Error(`TXT extraction failed: ${txtErr.message}`);
       }
     } else {
-      throw new Error(`Unsupported file type: ${filePath}.`);
+      // Unknown file type, try OCR as last-resort fallback.
+      try {
+        attemptedOcr = true;
+        textExtractionReason = 'Unknown or unsupported file type. Attempting OCR...';
+        console.log(textExtractionReason);
+
+        base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
+        let ocrText = await ocrDocument(base64File, mimeType);
+        ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
+        if (/([a-zA-Z0-9\s.,@]){30,}/.test(ocrText)) {
+          extractedText = ocrText;
+          console.log(`[Fallback OCR] Extracted text: ${ocrText.length} chars.`);
+        } else {
+          throw new Error('Unknown file type extraction failed, and fallback OCR failed.');
+        }
+      } catch (unknownErr) {
+        console.error("OCR fallback for unknown file type failed:", unknownErr);
+        throw new Error(`Extraction failed: Unknown file type and OCR fallback returned error: ${unknownErr.message}`);
+      }
     }
 
-    let cleanText = extractedText.replace(/\s+/g, ' ').trim();
+    // Final clean up & length clip before AI
+    let cleanText = (extractedText || '').replace(/\s+/g, ' ').trim();
     if (cleanText.length > 4000) cleanText = cleanText.substring(0, 4000);
-    console.log(`Sending ${cleanText.length} chars to AI.`);
+
+    if (cleanText.length < 30) {
+      let failMessage = "Text extraction failed. Could not extract enough text for parsing, even using OCR. Please try with a higher-resolution scan or a different format.";
+      if (attemptedOcr) {
+        failMessage += " (OCR was attempted.)";
+      }
+      throw new Error(failMessage);
+    }
+
+    console.log(`Proceeding to Groq AI with ${cleanText.length} chars. Extraction method: ${attemptedOcr ? 'OCR' : 'native text'}.`);
 
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -196,9 +258,8 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true, parsedData: parsedContent }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
-
   } catch (error) {
-    console.error(`Error processing resume ${resumeId || 'unknown'}:`, error.message);
+    console.error(`Error processing resume ${resumeId || 'unknown'}:`, error.message || error);
     if (resumeId) {
       try {
         const serviceClient = createClient(
@@ -211,7 +272,7 @@ serve(async (req) => {
         console.error('Fatal: Failed to update resume status to failed.', updateError);
       }
     }
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: error.message || JSON.stringify(error) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
