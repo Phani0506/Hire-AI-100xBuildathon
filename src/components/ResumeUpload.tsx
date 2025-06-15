@@ -23,6 +23,7 @@ const ResumeUpload = () => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [parsingError, setParsingError] = useState<string | null>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -159,6 +160,7 @@ const handleFiles = async (files: File[]) => {
     }
 
   setIsUploading(true);
+  setParsingError(null);
 
   for (const file of validFiles) {
     const fileId = crypto.randomUUID();
@@ -196,7 +198,6 @@ const handleFiles = async (files: File[]) => {
         )
       );
 
-      // Update status to processing and trigger AI parsing
       setUploadedFiles(prev => 
         prev.map(f => 
           f.id === fileId 
@@ -205,43 +206,64 @@ const handleFiles = async (files: File[]) => {
         )
       );
 
-      console.log('Triggering AI parsing for resume:', fileId);
+        // Call the parser and catch the error if it's a text-extraction issue
+        try {
+          const parseSuccess = await triggerParsing(fileId);
 
-      await new Promise(resolve => setTimeout(resolve, 1000));
+          if (parseSuccess) {
+            setUploadedFiles(prev => 
+              prev.map(f => 
+                f.id === fileId 
+                  ? { ...f, status: 'completed', progress: 100 }
+                  : f
+              )
+            );
 
-      // Trigger parsing with correct parameters!
-      const parseSuccess = await triggerParsing(fileId);
+            toast({
+              title: "Resume uploaded and parsed",
+              description: `${file.name} has been uploaded and parsed successfully with AI.`,
+            });
 
-      if (parseSuccess) {
-        setUploadedFiles(prev => 
-          prev.map(f => 
-            f.id === fileId 
-              ? { ...f, status: 'completed', progress: 100 }
-              : f
-          )
-        );
-        
-        toast({
-          title: "Resume uploaded and parsed",
-          description: `${file.name} has been uploaded and parsed successfully with AI.`,
-        });
-      } else {
-        setUploadedFiles(prev => 
-          prev.map(f => 
-            f.id === fileId 
-              ? { ...f, status: 'error' }
-              : f
-          )
-        );
-        
-        toast({
-          title: "Parsing failed",
-          description: `${file.name} was uploaded but AI parsing failed. Please try again.`,
-          variant: "destructive"
-        });
-      }
+          } else {
+            setUploadedFiles(prev => 
+              prev.map(f => 
+                f.id === fileId 
+                  ? { ...f, status: 'error' }
+                  : f
+              )
+            );
 
-    } catch (error) {
+            setParsingError(
+              "We couldn't parse your resume. Please upload a text-based PDF (not scanned), a Word document, or a .txt file."
+            );
+            toast({
+              title: "Parsing failed",
+              description:
+                `${file.name} was uploaded but parsing failed. Supported files: text-based PDFs, .doc/.docx, and .txt. If your PDF is scanned/image-based, use OCR or try a .txt file.`,
+              variant: "destructive"
+            });
+          }
+        } catch (err) {
+          setUploadedFiles(prev => 
+            prev.map(f => 
+              f.id === fileId 
+                ? { ...f, status: 'error' }
+                : f
+            )
+          );
+
+          setParsingError(
+            "We couldn't parse your resume. Please make sure it's not a scanned or image-based PDF. Try uploading a text-based PDF or a .txt file."
+          );
+          toast({
+            title: "Parsing failed",
+            description:
+              `${file.name} was uploaded but AI parsing failed. Image-only PDFs and scans are not supported. Try a .txt or text-based PDF.`,
+            variant: "destructive"
+          });
+        }
+
+      } catch (error) {
       console.error('Upload failed:', error);
       setUploadedFiles(prev => 
         prev.map(f => 
@@ -356,6 +378,16 @@ const handleFiles = async (files: File[]) => {
           </div>
         </CardContent>
       </Card>
+      {parsingError && (
+        <Card className="border-0 shadow bg-red-50/60 backdrop-blur-sm">
+          <CardContent className="py-4 text-center">
+            <p className="text-red-700 font-semibold">{parsingError}</p>
+            <p className="text-red-600 text-sm mt-2">
+              <strong>Tips:</strong> Scanned/image PDFs can’t be parsed. Save your resume as a text PDF from Word or Google Docs, or use TXT/RTF/DOCX files.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {uploadedFiles.length > 0 && (
         <Card className="border-0 shadow-lg bg-white/60 backdrop-blur-sm">
