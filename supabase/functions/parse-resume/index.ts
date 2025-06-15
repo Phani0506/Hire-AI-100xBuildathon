@@ -1,3 +1,4 @@
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
@@ -44,140 +45,82 @@ async function getGeminiCompletion(prompt: string) {
   return data.candidates[0].content.parts[0].text;
 }
 
-// Advanced PDF text extraction with multiple strategies
+// Improved PDF text extraction
 async function extractTextFromPDF(arrayBuffer: ArrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
     let extractedText = '';
     
-    // Convert to string with proper encoding handling
+    console.log(`Processing PDF of size: ${uint8Array.length} bytes`);
+    
+    // Convert to string and look for text patterns
     const decoder = new TextDecoder('utf-8', { fatal: false });
     const pdfContent = decoder.decode(uint8Array);
     
-    console.log(`Processing PDF of size: ${uint8Array.length} bytes`);
+    // Strategy 1: Extract text between parentheses (most common in PDFs)
+    const textInParens = pdfContent.match(/\(([^)]{3,})\)/g);
+    if (textInParens) {
+      for (const match of textInParens) {
+        const text = match.slice(1, -1); // Remove parentheses
+        if (text.length > 2 && /[a-zA-Z]/.test(text)) {
+          extractedText += text + ' ';
+        }
+      }
+    }
     
-    // Strategy 1: Extract text from PDF streams (most comprehensive)
+    // Strategy 2: Look for stream content with text objects
     const streamRegex = /stream\s*([\s\S]*?)\s*endstream/gi;
     let streamMatch;
-    let streamCount = 0;
-    
-    while ((streamMatch = streamRegex.exec(pdfContent)) !== null && streamCount < 50) {
-      streamCount++;
+    while ((streamMatch = streamRegex.exec(pdfContent)) !== null) {
       const streamData = streamMatch[1];
       
-      // Multiple text extraction patterns for different PDF encodings
-      const textPatterns = [
-        // Standard text objects
-        /BT\s+([\s\S]*?)\s+ET/gi,
-        // Text with positioning
-        /\(((?:[^()\\]|\\.)*)\)\s*Tj/gi,
-        /\(((?:[^()\\]|\\.)*)\)\s*TJ/gi,
-        // Array-based text
-        /\[((?:[^\[\]\\]|\\.)*)\]\s*TJ/gi,
-        // Font-based text
-        /\/F\d+\s+\d+\s+Tf\s+([\s\S]*?)(?=\/F\d+|\s*ET|\s*endstream)/gi,
-        // Simple parenthetical content
-        /\(([^)]{3,})\)/gi,
-      ];
-      
-      for (const pattern of textPatterns) {
-        let match;
-        while ((match = pattern.exec(streamData)) !== null) {
-          let text = match[1];
-          if (text && text.length > 2) {
-            // Clean and decode text
-            text = text
-              .replace(/\\n/g, ' ')
-              .replace(/\\r/g, ' ')
-              .replace(/\\t/g, ' ')
-              .replace(/\\\(/g, '(')
-              .replace(/\\\)/g, ')')
-              .replace(/\\\\/g, '\\')
-              .replace(/\\(\d{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)))
-              .replace(/\s+/g, ' ')
-              .trim();
-            
-            // Only include text that looks like actual content
-            if (text.length > 2 && /[a-zA-Z@.\-]/.test(text)) {
-              extractedText += text + ' ';
-            }
-          }
-        }
-      }
-    }
-    
-    // Strategy 2: Direct object content extraction
-    if (extractedText.length < 200) {
-      console.log('Fallback: Extracting from PDF objects');
-      const objRegex = /obj\s*([\s\S]*?)\s*endobj/gi;
-      let objMatch;
-      let objCount = 0;
-      
-      while ((objMatch = objRegex.exec(pdfContent)) !== null && objCount < 100) {
-        objCount++;
-        const objContent = objMatch[1];
-        
-        // Look for text in various formats
-        const patterns = [
-          /\(([^)]{5,})\)/gi,
-          /<([0-9a-fA-F\s]{10,})>/gi, // Hex encoded text
-          /\/Length\s+\d+[^(]*\(([^)]+)\)/gi,
-        ];
-        
-        for (const pattern of patterns) {
-          let match;
-          while ((match = pattern.exec(objContent)) !== null) {
-            let text = match[1];
-            
-            // Handle hex encoded text
-            if (/^[0-9a-fA-F\s]+$/.test(text)) {
-              try {
-                text = text.replace(/\s/g, '');
-                if (text.length % 2 === 0) {
-                  text = text.match(/.{2}/g)?.map(hex => String.fromCharCode(parseInt(hex, 16))).join('') || text;
-                }
-              } catch (e) {
-                // Continue with original text
+      // Extract text from BT...ET blocks
+      const textObjects = streamData.match(/BT\s+([\s\S]*?)\s+ET/gi);
+      if (textObjects) {
+        for (const textObj of textObjects) {
+          const textContent = textObj.match(/\(([^)]+)\)/g);
+          if (textContent) {
+            for (const text of textContent) {
+              const cleanText = text.slice(1, -1);
+              if (cleanText.length > 1 && /[a-zA-Z]/.test(cleanText)) {
+                extractedText += cleanText + ' ';
               }
             }
-            
-            text = text
-              .replace(/\\n|\\r|\\t/g, ' ')
-              .replace(/\\\(/g, '(')
-              .replace(/\\\)/g, ')')
-              .replace(/\\\\/g, '\\')
-              .replace(/\s+/g, ' ')
-              .trim();
-              
-            if (text.length > 3 && /[a-zA-Z@.\-]/.test(text)) {
-              extractedText += text + ' ';
-            }
+          }
+        }
+      }
+      
+      // Extract text with Tj and TJ operators
+      const tjMatches = streamData.match(/\(([^)]+)\)\s*T[jJ]/g);
+      if (tjMatches) {
+        for (const match of tjMatches) {
+          const text = match.match(/\(([^)]+)\)/);
+          if (text && text[1].length > 1) {
+            extractedText += text[1] + ' ';
           }
         }
       }
     }
     
-    // Strategy 3: Raw text extraction for text-based PDFs
+    // Strategy 3: Look for readable text patterns directly
     if (extractedText.length < 100) {
-      console.log('Fallback: Raw text extraction');
-      const textChunks = pdfContent.match(/[a-zA-Z][a-zA-Z0-9@.\-\s]{15,}/g) || [];
-      for (const chunk of textChunks.slice(0, 100)) {
-        const cleaned = chunk.replace(/\s+/g, ' ').trim();
-        if (cleaned.length > 10) {
-          extractedText += cleaned + ' ';
-        }
+      const readableText = pdfContent.match(/[A-Za-z][A-Za-z0-9@.\-\s]{10,}/g);
+      if (readableText) {
+        extractedText += readableText.slice(0, 50).join(' ') + ' ';
       }
     }
     
-    // Final cleanup
+    // Clean up the extracted text
     extractedText = extractedText
-      .replace(/\s+/g, ' ')
-      .replace(/[^\x20-\x7E\u00A0-\u017F\u0100-\u024F]/g, ' ')
+      .replace(/\\n|\\r|\\t/g, ' ')
+      .replace(/\\\(/g, '(')
+      .replace(/\\\)/g, ')')
+      .replace(/\\\\/g, '\\')
       .replace(/\s+/g, ' ')
       .trim();
     
     console.log(`PDF extraction completed: ${extractedText.length} characters extracted`);
-    console.log(`Sample: "${extractedText.substring(0, 500)}"`);
+    console.log(`Sample: "${extractedText.substring(0, 300)}"`);
     
     return extractedText;
   } catch (error) {
@@ -203,7 +146,7 @@ async function extractTextFromFile(fileData: Blob, fileName: string) {
       return '';
     }
   } else {
-    // For images and other formats, try to extract any readable text
+    // For other formats, try to extract any readable text
     try {
       const text = await fileData.text();
       return text.replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -219,71 +162,50 @@ function cleanTextForDatabase(text: string) {
   
   return text
     .replace(/[\x00-\x1F\x7F-\x9F]/g, ' ')
-    .replace(/[\u2000-\u206F\u2E00-\u2E7F]/g, ' ')
-    .replace(/[^\x20-\x7E\u00A0-\u017F\u0100-\u024F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Enhanced AI parsing with comprehensive prompts
+// Simplified and more effective AI parsing
 async function parseResumeWithAI(text: string) {
-  if (!text || text.length < 30) {
+  if (!text || text.length < 20) {
     throw new Error('Insufficient text for AI parsing');
   }
   
-  // Use full text capacity (Gemini can handle up to 1M tokens)
-  const maxLength = 50000; // Use more of Gemini's capacity
-  const textToProcess = text.length > maxLength ? text.substring(0, maxLength) : text;
+  console.log(`Parsing text of length: ${text.length}`);
+  console.log(`Text sample: "${text.substring(0, 500)}"`);
   
   const aiPrompt = `
-You are an expert resume parser. Analyze this resume text carefully and extract ALL available information. Return ONLY a JSON object with this exact structure:
+Extract information from this resume text and return ONLY a JSON object with this structure:
 
 {
-  "full_name": "actual name from resume",
-  "email": "actual email address", 
-  "phone": "actual phone number",
-  "location": "actual location/address",
-  "skills": ["skill1", "skill2", "skill3"],
-  "experience": [
-    {
-      "title": "actual job title",
-      "company": "actual company name", 
-      "duration": "actual dates/duration",
-      "description": "actual job description"
-    }
-  ],
-  "education": [
-    {
-      "degree": "actual degree/qualification",
-      "institution": "actual school/university",
-      "year": "actual year/dates"
-    }
-  ]
+  "full_name": "extract the person's name",
+  "email": "extract email address", 
+  "phone": "extract phone number",
+  "location": "extract location/address",
+  "skills": ["list of skills"],
+  "experience": [{"title": "job title", "company": "company name", "duration": "dates", "description": "job description"}],
+  "education": [{"degree": "degree/qualification", "institution": "school/university", "year": "year/dates"}]
 }
 
-CRITICAL PARSING INSTRUCTIONS:
-1. Extract the ACTUAL information from the resume text below
-2. For full_name: Look for the person's actual name (usually at the top of the resume)
-3. For email: Find email addresses containing @ symbol
-4. For phone: Look for phone numbers in various formats
-5. For location: Find city, state, country information
-6. For skills: Extract ALL technical skills, programming languages, tools, certifications
-7. For experience: Find ALL job positions with actual company names and descriptions
-8. For education: Extract ALL educational qualifications with actual institutions
-9. If information is not found, use null for strings and empty arrays for lists
-10. DO NOT use placeholder data like "John Doe", "example.com", "Tech Company"
-11. Extract information even if formatting is poor or text is fragmented
-12. Look for patterns like "Email:", "Phone:", "Skills:", "Experience:", "Education:"
-13. Be thorough - scan the entire text for any relevant information
+Rules:
+- Extract ACTUAL information from the text below
+- If you can't find information, use null for strings and [] for arrays
+- Don't make up information
+- Look for email patterns with @ symbol
+- Look for phone numbers with digits
+- Extract ALL skills mentioned
+- Extract ALL work experience
+- Extract ALL education
 
-Resume text to analyze:
-${textToProcess}
+Resume text:
+${text}
 `;
 
   try {
-    console.log('Sending comprehensive parsing request to Gemini AI...');
+    console.log('Sending parsing request to Gemini AI...');
     const aiResult = await getGeminiCompletion(aiPrompt);
-    console.log('Raw Gemini response length:', aiResult.length);
+    console.log('Raw Gemini response:', aiResult);
     
     // Clean the response
     let cleanedResult = aiResult.trim();
@@ -296,51 +218,20 @@ ${textToProcess}
     }
     
     const parsed = JSON.parse(cleanedResult);
-    console.log('AI parsing successful, validating results...');
+    console.log('Parsed AI result:', parsed);
     
-    // Validate and clean the result
+    // Return the result with proper field mapping
     const result = {
-      full_name: (parsed.full_name && typeof parsed.full_name === 'string' && 
-                  !parsed.full_name.toLowerCase().includes('john doe') && 
-                  parsed.full_name.trim().length > 0) ? parsed.full_name.trim() : null,
-      
-      email: (parsed.email && typeof parsed.email === 'string' && 
-              parsed.email.includes('@') && 
-              !parsed.email.includes('example.com') &&
-              !parsed.email.includes('john@')) ? parsed.email.trim() : null,
-      
-      phone: (parsed.phone && typeof parsed.phone === 'string' && 
-              !parsed.phone.includes('555-123-4567') &&
-              parsed.phone.trim().length > 0) ? parsed.phone.trim() : null,
-      
-      location: (parsed.location && typeof parsed.location === 'string' && 
-                 !parsed.location.toLowerCase().includes('new york, ny') &&
-                 parsed.location.trim().length > 0) ? parsed.location.trim() : null,
-      
-      skills_json: Array.isArray(parsed.skills) ? 
-        parsed.skills.filter(s => s && typeof s === 'string' && 
-                             !['javascript', 'react', 'node.js'].includes(s.toLowerCase()) &&
-                             s.trim().length > 0).map(s => s.trim()) : [],
-      
-      experience_json: Array.isArray(parsed.experience) ? 
-        parsed.experience.filter(exp => exp && typeof exp === 'object' && 
-                                 exp.company && !exp.company.toLowerCase().includes('tech company') &&
-                                 exp.title && exp.title.length > 0) : [],
-      
-      education_json: Array.isArray(parsed.education) ? 
-        parsed.education.filter(edu => edu && typeof edu === 'object' && 
-                               edu.institution && !edu.institution.toLowerCase().includes('university name') &&
-                               edu.degree && edu.degree.length > 0) : [],
+      full_name: parsed.full_name || null,
+      email: parsed.email || null,
+      phone: parsed.phone || null,
+      location: parsed.location || null,
+      skills_json: Array.isArray(parsed.skills) ? parsed.skills : [],
+      experience_json: Array.isArray(parsed.experience) ? parsed.experience : [],
+      education_json: Array.isArray(parsed.education) ? parsed.education : [],
     };
     
-    console.log('Validation complete. Extracted data:', JSON.stringify({
-      name: result.full_name,
-      email: result.email,
-      skillsCount: result.skills_json.length,
-      experienceCount: result.experience_json.length,
-      educationCount: result.education_json.length
-    }));
-    
+    console.log('Final parsed result:', result);
     return result;
     
   } catch (error) {
@@ -349,114 +240,47 @@ ${textToProcess}
   }
 }
 
-// Enhanced regex-based extraction as comprehensive fallback
+// Enhanced regex-based extraction as fallback
 function extractBasicInfoWithRegex(text: string) {
-  console.log('Using comprehensive regex fallback extraction...');
+  console.log('Using regex fallback extraction...');
   
-  // Email extraction with multiple patterns
-  const emailPatterns = [
-    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
-    /[Ee]mail:?\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})/g,
-    /[Ee]-?[Mm]ail:?\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})/g,
-  ];
+  // Email extraction
+  const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/);
+  const email = emailMatch ? emailMatch[0] : null;
   
-  let email = null;
-  for (const pattern of emailPatterns) {
-    const matches = [...text.matchAll(pattern)];
-    if (matches.length > 0) {
-      email = matches[0][1] || matches[0][0];
-      if (!email.includes('example.com') && !email.includes('john@')) {
-        break;
-      }
-    }
-  }
+  // Phone extraction
+  const phoneMatch = text.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+  const phone = phoneMatch ? phoneMatch[0] : null;
   
-  // Phone extraction with comprehensive patterns
-  const phonePatterns = [
-    /(?:[Pp]hone:?\s*)?(\+?\d{1,3}[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/g,
-    /(?:[Pp]hone:?\s*)?(\+\d{1,3}\s?)?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/g,
-    /(?:[Pp]hone:?\s*)?\(\d{3}\)\s?\d{3}[-.\s]?\d{4}/g,
-    /(?:[Mm]obile:?\s*)?(\+?\d{1,3}[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{4}/g,
-  ];
-  
-  let phone = null;
-  for (const pattern of phonePatterns) {
-    const matches = text.match(pattern);
-    if (matches && matches.length > 0) {
-      phone = matches[0].replace(/^[Pp]hone:?\s*|^[Mm]obile:?\s*/, '').trim();
-      if (!phone.includes('555-123-4567')) {
-        break;
-      }
-    }
-  }
-  
-  // Name extraction - look at first few meaningful lines
+  // Name extraction - look for capitalized words at the beginning
   const lines = text.split(/[\n\r]+/).filter(line => line.trim().length > 2);
-  let possibleName = null;
-  
-  for (let i = 0; i < Math.min(10, lines.length); i++) {
+  let name = null;
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
     const line = lines[i].trim();
-    if (line.length > 3 && line.length < 60 && 
+    if (line.length > 3 && line.length < 50 && 
         /^[A-Z][a-zA-Z\s.'-]+$/.test(line) && 
-        !line.toLowerCase().includes('resume') &&
-        !line.toLowerCase().includes('cv') &&
         !line.includes('@') &&
-        !line.match(/\d{3,}/) &&
-        line.split(' ').length >= 2 && line.split(' ').length <= 5) {
-      possibleName = line;
+        !line.match(/\d{3,}/)) {
+      name = line;
       break;
     }
   }
   
-  // Enhanced skills extraction
-  const skillCategories = [
-    // Programming languages
-    'javascript', 'python', 'java', 'c++', 'c#', 'php', 'ruby', 'swift', 'kotlin', 'go', 'rust', 'typescript',
-    // Web technologies
-    'html', 'css', 'react', 'angular', 'vue', 'node', 'express', 'django', 'flask', 'spring',
-    // Databases
-    'sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'sqlite', 'oracle',
-    // Cloud & DevOps
-    'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'git', 'jenkins', 'terraform',
-    // Other tools
-    'figma', 'photoshop', 'illustrator', 'canva', 'excel', 'powerpoint', 'tableau'
-  ];
-  
+  // Basic skills extraction
+  const commonSkills = ['javascript', 'python', 'java', 'react', 'node', 'sql', 'html', 'css', 'aws', 'git'];
   const foundSkills = [];
   const lowerText = text.toLowerCase();
-  
-  // Look for skills in context
-  const skillsSection = text.match(/skills:?\s*([^.]*?)(?:\n\n|education|experience|$)/i);
-  const skillsText = skillsSection ? skillsSection[1] : text;
-  
-  for (const skill of skillCategories) {
-    const regex = new RegExp(`\\b${skill}\\b`, 'i');
-    if (regex.test(skillsText)) {
+  for (const skill of commonSkills) {
+    if (lowerText.includes(skill)) {
       foundSkills.push(skill.charAt(0).toUpperCase() + skill.slice(1));
     }
   }
   
-  // Location extraction with multiple patterns
-  const locationPatterns = [
-    /(?:[Ll]ocation:?\s*)?([A-Z][a-zA-Z\s]+),\s*([A-Z]{2}|[A-Z][a-zA-Z\s]+)/g,
-    /(?:[Aa]ddress:?\s*)?([A-Z][a-zA-Z\s]+),\s*([A-Z]{2})/g,
-    /([A-Z][a-zA-Z\s]+),\s*([A-Z]{2})\s*\d{5}/g,
-  ];
-  
-  let location = null;
-  for (const pattern of locationPatterns) {
-    const matches = text.match(pattern);
-    if (matches && matches.length > 0) {
-      location = matches[0].replace(/^[Ll]ocation:?\s*|^[Aa]ddress:?\s*/, '').trim();
-      break;
-    }
-  }
-  
   return {
-    full_name: possibleName,
+    full_name: name,
     email: email,
     phone: phone,
-    location: location,
+    location: null,
     skills_json: foundSkills,
     experience_json: [],
     education_json: [],
@@ -484,7 +308,7 @@ serve(async (req) => {
       throw new Error(`Missing resumeId or filePath. Body received: ${JSON.stringify(body)}`);
     }
     
-    console.log(`Starting comprehensive parsing for resume ${resumeId} with file path: ${filePath}`);
+    console.log(`Starting parsing for resume ${resumeId} with file path: ${filePath}`);
     
     const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '', 
@@ -502,13 +326,12 @@ serve(async (req) => {
 
     console.log(`File downloaded successfully: ${filePath}`);
 
-    // Extract text from the file with enhanced extraction
+    // Extract text from the file
     const fileName = filePath.split('/').pop() || 'unknown';
     let rawText = await extractTextFromFile(fileData, fileName);
     
     let cleanText = cleanTextForDatabase(rawText);
     console.log(`Text extracted and cleaned, length: ${cleanText.length} characters`);
-    console.log(`Sample text: "${cleanText.substring(0, 300)}"`);
 
     // Get resume user_id
     const { data: resumeData, error: resumeError } = await serviceClient
@@ -533,9 +356,9 @@ serve(async (req) => {
       raw_text_content: cleanText
     };
 
-    // Always try AI parsing first if we have any text
-    if (cleanText.length > 20) {
-      console.log(`Attempting comprehensive AI parsing for resume ${resumeId}...`);
+    // Try AI parsing first if we have meaningful text
+    if (cleanText.length > 30) {
+      console.log(`Attempting AI parsing for resume ${resumeId}...`);
       
       try {
         const aiParsedData = await parseResumeWithAI(cleanText);
@@ -548,9 +371,9 @@ serve(async (req) => {
         
       } catch (aiError) {
         console.error(`AI parsing failed: ${aiError.message}`);
-        console.log('Falling back to comprehensive regex extraction...');
+        console.log('Falling back to regex extraction...');
         
-        // Comprehensive regex fallback
+        // Regex fallback
         const fallbackData = extractBasicInfoWithRegex(cleanText);
         parsedContent = {
           ...parsedContent,
@@ -558,9 +381,9 @@ serve(async (req) => {
         };
       }
     } else {
-      console.log(`Text too short for parsing (${cleanText.length} characters), using regex extraction`);
+      console.log(`Text too short for AI parsing, using regex extraction`);
       
-      // Still try regex extraction for short text
+      // Use regex extraction for short text
       const fallbackData = extractBasicInfoWithRegex(cleanText);
       parsedContent = {
         ...parsedContent,
@@ -568,7 +391,7 @@ serve(async (req) => {
       };
     }
 
-    console.log('Final parsed content summary:', JSON.stringify({
+    console.log('Final parsed content:', JSON.stringify({
       name: parsedContent.full_name,
       email: parsedContent.email,
       phone: parsedContent.phone,
@@ -612,6 +435,7 @@ serve(async (req) => {
         parsed: {
           name: parsedContent.full_name,
           email: parsedContent.email,
+          phone: parsedContent.phone,
           skillsCount: parsedContent.skills_json.length,
           experienceCount: parsedContent.experience_json.length
         }
