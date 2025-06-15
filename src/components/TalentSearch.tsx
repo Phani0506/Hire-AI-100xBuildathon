@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Search, User, MapPin, Briefcase, Mail, Phone } from "lucide-react";
+import { Search, User, MapPin, Briefcase, Mail, Phone, CornerDownRight } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -19,6 +19,12 @@ interface ParsedCandidate {
   education_json: any[];
   resume_file_name: string;
   relevanceScore?: number;
+}
+
+interface ScreeningQuestionsState {
+  loading: boolean;
+  questions: string[] | null;
+  error: string | null;
 }
 
 // Mock data for demonstration
@@ -116,6 +122,7 @@ const TalentSearch = () => {
   const [searchResults, setSearchResults] = useState<ParsedCandidate[]>([]);
   const [allCandidates, setAllCandidates] = useState<ParsedCandidate[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [screeningQuestions, setScreeningQuestions] = useState<Record<string, ScreeningQuestionsState>>({});
 
   useEffect(() => {
     if (user) {
@@ -301,19 +308,68 @@ Best regards,
     });
   };
 
-  const generateQuestions = (candidate: ParsedCandidate) => {
-    toast({
-      title: "Generating screening questions",
-      description: `Creating AI-powered questions for ${candidate.full_name || 'candidate'}...`,
-    });
-    
-    // This will be replaced with actual AI question generation
-    setTimeout(() => {
-      toast({
-        title: "Questions generated",
-        description: `5 screening questions created for ${candidate.full_name || 'candidate'}.`,
+  const generateQuestions = async (candidate: ParsedCandidate) => {
+    const candidateId = candidate.id;
+
+    // Toggle: if questions are already there or loading, hide/cancel them.
+    if (screeningQuestions[candidateId]) {
+      setScreeningQuestions(prev => {
+        const newState = { ...prev };
+        delete newState[candidateId];
+        return newState;
       });
-    }, 2000);
+      return;
+    }
+
+    setScreeningQuestions(prev => ({
+      ...prev,
+      [candidateId]: { loading: true, questions: null, error: null }
+    }));
+
+    toast({
+      title: "Generating screening questions...",
+      description: `Creating AI-powered questions for ${getDisplayName(candidate)}.`,
+    });
+
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-screening-questions', {
+        body: {
+          skills: candidate.skills_json?.slice(0, 10), // Send top 10 skills
+          title: getDisplayTitle(candidate),
+        }
+      });
+
+      if (error) throw error;
+      
+      if (data.error) throw new Error(data.error);
+
+      if (!data.questions || data.questions.length === 0) {
+        throw new Error("AI did not return any questions. Please try again.");
+      }
+
+      setScreeningQuestions(prev => ({
+        ...prev,
+        [candidateId]: { loading: false, questions: data.questions, error: null }
+      }));
+
+      toast({
+        title: "Questions generated!",
+        description: `Screening questions for ${getDisplayName(candidate)} are ready.`,
+      });
+
+    } catch (error: any) {
+      console.error('Error generating questions:', error);
+      const errorMessage = error.message || "An unknown error occurred.";
+      setScreeningQuestions(prev => ({
+        ...prev,
+        [candidateId]: { loading: false, questions: null, error: errorMessage }
+      }));
+      toast({
+        title: "Failed to generate questions",
+        description: errorMessage,
+        variant: "destructive"
+      });
+    }
   };
 
   const calculateExperience = (experience_json: any[]) => {
@@ -494,8 +550,18 @@ Best regards,
                     onClick={() => generateQuestions(candidate)}
                     variant="outline"
                     size="sm"
+                    disabled={screeningQuestions[candidate.id]?.loading}
                   >
-                    Generate Questions
+                    {screeningQuestions[candidate.id]?.loading ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                        Generating...
+                      </>
+                    ) : screeningQuestions[candidate.id]?.questions ? (
+                      "Hide Questions"
+                    ) : (
+                      "Generate Questions"
+                    )}
                   </Button>
                   <Button 
                     onClick={() => handleOutreach(candidate)}
@@ -506,6 +572,35 @@ Best regards,
                     Outreach via Gmail
                   </Button>
                 </div>
+
+                {screeningQuestions[candidate.id] && (
+                  <div className="mt-4 p-4 bg-blue-50/50 rounded-lg border border-blue-100 transition-all duration-300">
+                    {screeningQuestions[candidate.id].loading && (
+                      <div className="flex items-center space-x-2 text-blue-800 animate-pulse">
+                         <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                         <span>Generating AI questions based on resume...</span>
+                      </div>
+                    )}
+                    {screeningQuestions[candidate.id].error && (
+                      <p className="text-sm text-red-600">
+                        <strong>Error:</strong> {screeningQuestions[candidate.id].error}
+                      </p>
+                    )}
+                    {screeningQuestions[candidate.id].questions && (
+                      <div>
+                        <h5 className="font-semibold text-gray-800 mb-2">Suggested Screening Questions:</h5>
+                        <ul className="space-y-2">
+                          {screeningQuestions[candidate.id].questions?.map((q, i) => (
+                            <li key={i} className="flex items-start text-sm text-gray-700">
+                              <CornerDownRight className="w-4 h-4 mt-0.5 mr-2 shrink-0 text-blue-600" />
+                              <span>{q}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}
