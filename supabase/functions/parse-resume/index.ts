@@ -1,3 +1,5 @@
+
+// deno-lint-ignore-file no-explicit-any
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
@@ -7,13 +9,13 @@ const corsHeaders = {
 };
 
 // Extract text content from PDF by scanning for text patterns (good for text-based PDFs)
-async function extractTextFromPDF(arrayBuffer) {
+async function extractTextFromPDF(arrayBuffer: ArrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
     let text = '';
     let pdfAsString = '';
     for (let i = 0; i < uint8Array.length; i++) {
-        pdfAsString += String.fromCharCode(uint8Array[i]);
+      pdfAsString += String.fromCharCode(uint8Array[i]);
     }
     const streamMatches = pdfAsString.match(/stream([\s\S]*?)endstream/g) || [];
     for (const stream of streamMatches) {
@@ -36,12 +38,11 @@ async function extractTextFromPDF(arrayBuffer) {
 }
 
 // OCR: Send file to Hugging Face Inference API (returns extracted text)
-async function ocrDocument(base64Str, mimeType) {
+async function ocrDocument(base64Str: string, mimeType: string) {
   const HF_TOKEN = Deno.env.get("HUGGING_FACE_ACCESS_TOKEN");
   if (!HF_TOKEN) throw new Error("Missing Hugging Face token (HUGGING_FACE_ACCESS_TOKEN)");
 
   // Try a standard English document OCR Model
-  // You may change model to "microsoft/trocr-base-stage1" or another as desired
   const response = await fetch('https://api-inference.huggingface.co/models/impira/layoutlm-document-qa', {
     method: 'POST',
     headers: {
@@ -55,26 +56,28 @@ async function ocrDocument(base64Str, mimeType) {
   if (!response.ok) throw new Error('Hugging Face OCR failed: ' + (await response.text()));
   const result = await response.json();
   if (typeof result === "object" && Array.isArray(result) && result.length && result[0].text) {
-    return result.map(x => x.text).join(' ');
+    return result.map((x: any) => x.text).join(' ');
   }
-  if (typeof result === "object" && result.text) {
+  if (typeof result === "object" && "text" in result) {
     return result.text;
   }
   return "";
 }
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
-  let resumeId;
+  let resumeId: string | undefined;
   try {
     const requestBody = await req.json();
     resumeId = requestBody.resumeId;
     const filePath = requestBody.filePath;
     if (!resumeId || !filePath) {
-      throw new Error(`Missing resumeId or filePath in request. Received body: ${JSON.stringify(requestBody)}`);
+      throw new Error(
+        `Missing resumeId or filePath in request. Received body: ${JSON.stringify(requestBody)}`
+      );
     }
 
     console.log('Processing resume:', { resumeId, filePath });
@@ -267,7 +270,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ success: true, parsedData: parsedContent }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error(`Error processing resume ${resumeId || 'unknown'}:`, error.message || error);
     if (resumeId) {
       try {
