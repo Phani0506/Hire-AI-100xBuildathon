@@ -113,10 +113,6 @@ const Dashboard = () => {
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="grid w-full grid-cols-5 bg-white/60 backdrop-blur-sm">
-            <TabsTrigger value="dashboard" className="flex items-center space-x-2">
-              <BarChart className="w-4 h-4" />
-              <span className="hidden sm:inline">Dashboard</span>
-            </TabsTrigger>
             <TabsTrigger value="upload" className="flex items-center space-x-2">
               <Upload className="w-4 h-4" />
               <span className="hidden sm:inline">Upload</span>
@@ -128,6 +124,10 @@ const Dashboard = () => {
             <TabsTrigger value="search" className="flex items-center space-x-2">
               <Search className="w-4 h-4" />
               <span className="hidden sm:inline">Search</span>
+            </TabsTrigger>
+            <TabsTrigger value="dashboard" className="flex items-center space-x-2">
+              <BarChart className="w-4 h-4" />
+              <span className="hidden sm:inline">Dashboard</span>
             </TabsTrigger>
             <TabsTrigger value="settings" className="flex items-center space-x-2">
               <Settings className="w-4 h-4" />
