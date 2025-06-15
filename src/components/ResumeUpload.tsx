@@ -1,4 +1,3 @@
-
 import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,69 +49,70 @@ const ResumeUpload = () => {
     }
   };
 
-  const uploadToSupabase = async (file: File, fileId: string) => {
-    if (!user) {
-      throw new Error('User not authenticated');
-    }
+const uploadToSupabase = async (file: File, fileId: string) => {
+  if (!user) {
+    throw new Error('User not authenticated');
+  }
 
-    console.log('Starting upload for file:', file.name, 'User ID:', user.id);
+  console.log('Starting upload for file:', file.name, 'User ID:', user.id);
 
-    // Create file path with user folder structure
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${user.id}/${fileId}.${fileExt}`;
+  // Create file path with user folder structure
+  const fileExt = file.name.split('.').pop();
+  // Path format: "user_id/fileId.ext"
+  const filePath = `${user.id}/${fileId}.${fileExt}`;
 
-    // Upload file to Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('resumes')
-      .upload(fileName, file, {
-        cacheControl: '3600',
-        upsert: false
-      });
+  // Upload file to Supabase Storage (bucket: 'resumes')
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from('resumes')
+    .upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: false
+    });
 
-    if (uploadError) {
-      console.error('Upload error:', uploadError);
-      throw uploadError;
-    }
+  if (uploadError) {
+    console.error('Upload error:', uploadError);
+    throw uploadError;
+  }
 
-    console.log('File uploaded successfully:', uploadData);
+  console.log('File uploaded successfully:', uploadData);
 
-    // Insert record into resumes table
-    const { data: resumeData, error: resumeError } = await supabase
-      .from('resumes')
-      .insert([
-        {
-          id: fileId,
-          user_id: user.id,
-          file_name: file.name,
-          file_size: file.size,
-          file_type: file.type,
-          supabase_storage_path: uploadData.path,
-          parsing_status: 'pending'
-        }
-      ])
-      .select()
-      .single();
+  // Insert record into resumes table
+  const { data: resumeData, error: resumeError } = await supabase
+    .from('resumes')
+    .insert([
+      {
+        id: fileId,
+        user_id: user.id,
+        file_name: file.name,
+        file_size: file.size,
+        file_type: file.type,
+        supabase_storage_path: filePath, // Critical: <--- use EXACT file path as stored
+        parsing_status: 'pending'
+      }
+    ])
+    .select()
+    .single();
 
-    if (resumeError) {
-      console.error('Database error:', resumeError);
-      // Clean up uploaded file if database insert fails
-      await supabase.storage.from('resumes').remove([fileName]);
-      throw resumeError;
-    }
+  if (resumeError) {
+    console.error('Database error:', resumeError);
+    // Clean up uploaded file if the database insert fails
+    await supabase.storage.from('resumes').remove([filePath]);
+    throw resumeError;
+  }
 
-    console.log('Resume record created:', resumeData);
-    return resumeData;
-  };
+  console.log('Resume record created:', resumeData);
+  return resumeData;
+};
 
-  const handleFiles = async (files: File[]) => {
-    if (!user) {
-      toast({
-        title: "Authentication required",
-        description: "Please log in to upload resumes.",
-        variant: "destructive"
-      });
-      return;
-    }
+const handleFiles = async (files: File[]) => {
+  if (!user) {
+    toast({
+      title: "Authentication required",
+      description: "Please log in to upload resumes.",
+      variant: "destructive"
+    });
+    return;
+  }
 
     // Expanded list of supported file types
     const allowedTypes = [
@@ -158,93 +158,74 @@ const ResumeUpload = () => {
       return;
     }
 
-    setIsUploading(true);
+  setIsUploading(true);
 
-    for (const file of validFiles) {
-      const fileId = crypto.randomUUID();
-      const uploadFile: UploadedFile = {
-        id: fileId,
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        uploadedAt: new Date(),
-        status: 'uploading',
-        progress: 0
-      };
+  for (const file of validFiles) {
+    const fileId = crypto.randomUUID();
+    const uploadFile: UploadedFile = {
+      id: fileId,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      uploadedAt: new Date(),
+      status: 'uploading',
+      progress: 0
+    };
 
-      setUploadedFiles(prev => [...prev, uploadFile]);
+    setUploadedFiles(prev => [...prev, uploadFile]);
 
-      try {
-        console.log('Processing file:', file.name);
-        
-        // Update progress to show uploading
+    try {
+      console.log('Processing file:', file.name);
+
+      setUploadedFiles(prev => 
+        prev.map(f => 
+          f.id === fileId 
+            ? { ...f, progress: 30 }
+            : f
+        )
+      );
+
+      // Upload file to Supabase storage and database
+      const resumeData = await uploadToSupabase(file, fileId);
+
+      setUploadedFiles(prev => 
+        prev.map(f => 
+          f.id === fileId 
+            ? { ...f, progress: 60 }
+            : f
+        )
+      );
+
+      // Update status to processing and trigger AI parsing
+      setUploadedFiles(prev => 
+        prev.map(f => 
+          f.id === fileId 
+            ? { ...f, status: 'processing', progress: 80 }
+            : f
+        )
+      );
+
+      console.log('Triggering AI parsing for resume:', fileId);
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Trigger parsing with correct parameters!
+      const parseSuccess = await triggerParsing(fileId);
+
+      if (parseSuccess) {
         setUploadedFiles(prev => 
           prev.map(f => 
             f.id === fileId 
-              ? { ...f, progress: 30 }
+              ? { ...f, status: 'completed', progress: 100 }
               : f
           )
         );
-
-        // Upload to Supabase
-        await uploadToSupabase(file, fileId);
-
-        // Update progress
-        setUploadedFiles(prev => 
-          prev.map(f => 
-            f.id === fileId 
-              ? { ...f, progress: 60 }
-              : f
-          )
-        );
-
-        // Update status to processing and trigger AI parsing
-        setUploadedFiles(prev => 
-          prev.map(f => 
-            f.id === fileId 
-              ? { ...f, status: 'processing', progress: 80 }
-              : f
-          )
-        );
-
-        console.log('Triggering AI parsing for resume:', fileId);
         
-        // Add a small delay to ensure the file is properly uploaded before parsing
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        const parseSuccess = await triggerParsing(fileId);
-
-        if (parseSuccess) {
-          setUploadedFiles(prev => 
-            prev.map(f => 
-              f.id === fileId 
-                ? { ...f, status: 'completed', progress: 100 }
-                : f
-            )
-          );
-          
-          toast({
-            title: "Resume uploaded and parsed",
-            description: `${file.name} has been uploaded and parsed successfully with AI.`,
-          });
-        } else {
-          setUploadedFiles(prev => 
-            prev.map(f => 
-              f.id === fileId 
-                ? { ...f, status: 'error' }
-                : f
-            )
-          );
-          
-          toast({
-            title: "Parsing failed",
-            description: `${file.name} was uploaded but AI parsing failed. Please try again.`,
-            variant: "destructive"
-          });
-        }
-
-      } catch (error) {
-        console.error('Upload failed:', error);
+        toast({
+          title: "Resume uploaded and parsed",
+          description: `${file.name} has been uploaded and parsed successfully with AI.`,
+        });
+      } else {
         setUploadedFiles(prev => 
           prev.map(f => 
             f.id === fileId 
@@ -254,15 +235,32 @@ const ResumeUpload = () => {
         );
         
         toast({
-          title: "Upload failed",
-          description: `Failed to upload ${file.name}. Please try again.`,
+          title: "Parsing failed",
+          description: `${file.name} was uploaded but AI parsing failed. Please try again.`,
           variant: "destructive"
         });
       }
-    }
 
-    setIsUploading(false);
-  };
+    } catch (error) {
+      console.error('Upload failed:', error);
+      setUploadedFiles(prev => 
+        prev.map(f => 
+          f.id === fileId 
+            ? { ...f, status: 'error' }
+            : f
+        )
+      );
+      
+      toast({
+        title: "Upload failed",
+        description: `Failed to upload ${file.name}. Please try again.`,
+        variant: "destructive"
+      });
+    }
+  }
+
+  setIsUploading(false);
+};
 
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId));
