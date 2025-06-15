@@ -2,14 +2,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
-// Import PDF.js-extract (browser-compatible) for splitting and extracting PDF images
-import * as pdfjsLib from "https://cdn.skypack.dev/pdfjs-dist@3.11.174/legacy/build/pdf.js";
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
 };
 
+// Extract text content from PDF by scanning for text patterns (good for text-based PDFs)
 async function extractTextFromPDF(arrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
@@ -30,7 +28,7 @@ async function extractTextFromPDF(arrayBuffer) {
       });
     }
     text = text.replace(/\s+/g, ' ').trim();
-    console.log(`Extracted ${text.length} characters from PDF.`);
+    console.log(`Extracted ${text.length} characters from PDF by internal method.`);
     return text;
   } catch (error) {
     console.error('PDF extraction error:', error);
@@ -38,57 +36,25 @@ async function extractTextFromPDF(arrayBuffer) {
   }
 }
 
-// Extract images as data URLs from PDF using PDF.js
-async function extractImagesFromPDF(arrayBuffer) {
-  try {
-    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
-    const pdf = await loadingTask.promise;
-    const images = [];
-
-    for(let pageNum = 1; pageNum <= pdf.numPages && pageNum <= 5; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const ops = await page.getOperatorList();
-      const objs = page.objs;
-
-      const viewport = page.getViewport({ scale: 2.0 });
-      // Create canvas in JS (simulate HTML canvas)
-      const canvas = new OffscreenCanvas(viewport.width, viewport.height);
-      const context = canvas.getContext('2d');
-      // Render the page into this canvas
-      await page.render({ canvasContext: context, viewport }).promise;
-      // Export to PNG
-      const blob = await canvas.convertToBlob();
-      const arrayBufferImg = await blob.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBufferImg)));
-      images.push(`data:image/png;base64,${base64}`);
-    }
-
-    console.log(`Extracted ${images.length} images from PDF`);
-    return images;
-  } catch (e) {
-    console.error('Failed to extract images from PDF:', e);
-    return [];
-  }
-}
-
-// OCR : Send image to Hugging Face Inference API (returns text)
-async function ocrImage(base64Image) {
+// OCR: Send file to Hugging Face Inference API (returns extracted text)
+async function ocrDocument(base64Str, mimeType) {
   const HF_TOKEN = Deno.env.get("HUGGING_FACE_ACCESS_TOKEN");
   if (!HF_TOKEN) throw new Error("Missing Hugging Face token (HUGGING_FACE_ACCESS_TOKEN)");
 
-  const response = await fetch('https://api-inference.huggingface.co/models/microsoft/trocr-base-stage1', {
+  // Try a standard English document OCR Model
+  // You may change model to "microsoft/trocr-base-stage1" or another as desired
+  const response = await fetch('https://api-inference.huggingface.co/models/impira/layoutlm-document-qa', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${HF_TOKEN}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      inputs: base64Image
+      inputs: `data:${mimeType};base64,${base64Str}`
     })
   });
   if (!response.ok) throw new Error('Hugging Face OCR failed: ' + (await response.text()));
   const result = await response.json();
-  // HF returns either an object {text: "..."} or [{text: "..."}]
   if (typeof result === "object" && Array.isArray(result) && result.length && result[0].text) {
     return result.map(x => x.text).join(' ');
   }
@@ -108,13 +74,12 @@ serve(async (req) => {
     const requestBody = await req.json();
     resumeId = requestBody.resumeId;
     const filePath = requestBody.filePath;
-    
     if (!resumeId || !filePath) {
-      throw new Error(`Missing resumeId or filePath in the request body. Body received: ${JSON.stringify(requestBody)}`);
+      throw new Error(`Missing resumeId or filePath in request. Received body: ${JSON.stringify(requestBody)}`);
     }
-    
+
     console.log('Processing resume:', { resumeId, filePath });
-    
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -128,34 +93,56 @@ serve(async (req) => {
     if (downloadError) throw new Error(`Failed to download file: ${downloadError.message}`);
 
     let extractedText = '';
-    if (filePath.toLowerCase().endsWith('.pdf')) {
-      extractedText = await extractTextFromPDF(await fileData.arrayBuffer());
-      // If text extraction failed or is very short, try OCR for each page
+    const fileExt = filePath.split('.').pop()?.toLowerCase();
+    let docBuffer = await fileData.arrayBuffer();
+    let mimeType = "application/pdf";
+    if (fileExt === "txt") mimeType = "text/plain";
+    else if (fileExt === "docx") mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    else if (fileExt === "doc") mimeType = "application/msword";
+    else if (fileExt === "rtf") mimeType = "application/rtf";
+    else if (fileExt === "odt") mimeType = "application/vnd.oasis.opendocument.text";
+
+    if (fileExt === "pdf") {
+      // Try internal text extraction first
+      extractedText = await extractTextFromPDF(docBuffer);
+
+      // If little/no text, try OCR on the entire raw file using Hugging Face API
       if (!/([a-zA-Z0-9\s.,@]){50,}/.test(extractedText)) {
-        console.log('Primary extraction failed or resulted in little text. Running OCR...');
-        const images = await extractImagesFromPDF(await fileData.arrayBuffer());
-        let ocrResult = '';
-        for (const img of images) {
-          const ocrText = await ocrImage(img);
-          ocrResult += ocrText + " ";
-        }
-        ocrResult = ocrResult.replace(/\s+/g, " ").trim();
-        console.log(`OCR extracted ${ocrResult.length} characters`);
-        if (/([a-zA-Z0-9\s.,@]){50,}/.test(ocrResult)) {
-          extractedText = ocrResult;
+        console.log('Primary PDF text extraction too short/failed. Performing document OCR...');
+        const base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
+        let ocrText = await ocrDocument(base64File, mimeType);
+        ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
+        if (/([a-zA-Z0-9\s.,@]){50,}/.test(ocrText)) {
+          extractedText = ocrText;
+          console.log(`OCR extracted ${ocrText.length} characters from image-based PDF.`);
         } else {
-          throw new Error('Text extraction failed: PDF is likely not a valid resume or is too empty for OCR.');
+          throw new Error('Text extraction failed: Resume appears to be unreadable or too empty even for OCR.');
         }
       }
-    } else if (filePath.toLowerCase().endsWith('.txt')) {
+    } else if (fileExt === "txt") {
       extractedText = await fileData.text();
+    } else if (
+      fileExt === "docx" ||
+      fileExt === "doc" ||
+      fileExt === "rtf" ||
+      fileExt === "odt"
+    ) {
+      // For other document types, try OCR as fallback
+      const base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
+      let ocrText = await ocrDocument(base64File, mimeType);
+      ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
+      if (/([a-zA-Z0-9\s.,@]){50,}/.test(ocrText)) {
+        extractedText = ocrText;
+        console.log(`OCR extracted ${ocrText.length} characters from document type: ${fileExt}`);
+      } else {
+        throw new Error('Text extraction failed: Document appears to be unreadable or too empty even for OCR.');
+      }
     } else {
       throw new Error(`Unsupported file type: ${filePath}.`);
     }
 
     let cleanText = extractedText.replace(/\s+/g, ' ').trim();
     if (cleanText.length > 4000) cleanText = cleanText.substring(0, 4000);
-    
     console.log(`Sending ${cleanText.length} chars to AI.`);
 
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -183,7 +170,6 @@ serve(async (req) => {
     const groqData = await groqResponse.json();
     const messageContent = groqData.choices?.[0]?.message?.content;
     if (!messageContent) throw new Error('Invalid or empty response from Groq AI.');
-    
     const parsedContent = JSON.parse(messageContent);
     console.log('Successfully parsed AI response.');
 
