@@ -251,60 +251,21 @@ const TalentSearch = () => {
 
     // Simulate search delay for better UX
     setTimeout(() => {
-      const query = searchQuery.toLowerCase();
-      
-      // Filter candidates based on search criteria
-      const filtered = allCandidates.filter(candidate => {
-        // Search in name
-        if (candidate.full_name && candidate.full_name.toLowerCase().includes(query)) {
-          return true;
-        }
-        
-        // Search in location
-        if (candidate.location && candidate.location.toLowerCase().includes(query)) {
-          return true;
-        }
-        
-        // Search in skills
-        if (candidate.skills_json && candidate.skills_json.some(skill => 
-          skill.toLowerCase().includes(query)
-        )) {
-          return true;
-        }
-        
-        // Search in experience
-        if (candidate.experience_json && candidate.experience_json.some(exp => 
-          (exp.company && exp.company.toLowerCase().includes(query)) ||
-          (exp.position && exp.position.toLowerCase().includes(query)) ||
-          (exp.description && exp.description.toLowerCase().includes(query))
-        )) {
-          return true;
-        }
-        
-        // Search in education
-        if (candidate.education_json && candidate.education_json.some(edu => 
-          (edu.degree && edu.degree.toLowerCase().includes(query)) ||
-          (edu.institution && edu.institution.toLowerCase().includes(query)) ||
-          (edu.field && edu.field.toLowerCase().includes(query))
-        )) {
-          return true;
-        }
-        
-        return false;
-      });
+      // Calculate relevance scores for all candidates, filter, and sort.
+      const rankedResults = allCandidates
+        .map(candidate => ({
+          ...candidate,
+          relevanceScore: calculateRelevanceScore(candidate, searchQuery),
+        }))
+        .filter(candidate => (candidate.relevanceScore || 0) > 0)
+        .sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
 
-      // Calculate relevance scores and sort by relevance
-      const scoredResults = filtered.map(candidate => ({
-        ...candidate,
-        relevanceScore: calculateRelevanceScore(candidate, searchQuery)
-      })).sort((a, b) => b.relevanceScore - a.relevanceScore);
-
-      setSearchResults(scoredResults);
+      setSearchResults(rankedResults);
       setIsSearching(false);
 
       toast({
         title: "Search completed",
-        description: `Found ${filtered.length} matching candidates, ranked by relevance.`,
+        description: `Found ${rankedResults.length} matching candidates, ranked by relevance.`,
       });
     }, 1000);
   };
