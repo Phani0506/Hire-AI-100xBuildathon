@@ -106,26 +106,36 @@ serve(async (req) => {
     else mimeType = "application/octet-stream";
 
     let attemptedOcr = false;
-    let base64File = '';
     let textExtractionReason = '';
+    let base64File = '';
 
+    /**
+     * LOGIC CHANGE: 
+     *  - Only try OCR if the native method returns LESS THAN 200 chars with at least some Latin chars. 
+     *  - Else, use the natively extracted text.
+     *  - Prevent recursive/cascading OCR fallback.
+     */
     if (fileExt === "pdf") {
-      // 1. Try internal text extraction
       extractedText = await extractTextFromPDF(docBuffer);
 
-      // 1a. If internal extraction fails/few chars, always do OCR
-      if (!/([a-zA-Z0-9\s.,@]){30,}/.test(extractedText)) {
+      // If the native extraction is sufficient, skip OCR.
+      if (extractedText && extractedText.replace(/\s/g, '').length >= 200 && /[a-zA-Z]/.test(extractedText)) {
+        textExtractionReason = '[PDF] Sufficient native text extraction, skipping OCR.';
+        console.log(textExtractionReason, `Length: ${extractedText.length}`);
+        // continue
+      } else {
+        // Not enough native text, try OCR
         try {
           attemptedOcr = true;
-          textExtractionReason = 'Primary PDF text extraction too short or failed. Performing document OCR...';
+          textExtractionReason = '[PDF] Native extraction insufficient, performing OCR fallback...';
           console.log(textExtractionReason);
 
           base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
           let ocrText = await ocrDocument(base64File, mimeType);
           ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
-          if (/([a-zA-Z0-9\s.,@]){30,}/.test(ocrText)) {
+          if (ocrText && ocrText.replace(/\s/g, '').length >= 200 && /[a-zA-Z]/.test(ocrText)) {
             extractedText = ocrText;
-            console.log(`[OCR] Extracted text: ${ocrText.length} chars.`);
+            console.log(`[OCR] Extracted text: ${ocrText.length} chars (used OCR).`);
           } else {
             throw new Error('Text extraction failed: Resume appears to be unreadable or too empty even for OCR.');
           }
@@ -133,8 +143,6 @@ serve(async (req) => {
           console.error("PDF OCR fallback failed:", ocrErr);
           throw new Error(`PDF text extraction and OCR both failed: ${ocrErr.message}`);
         }
-      } else {
-        console.log(`[NativeText] Extracted text: ${extractedText.length} chars.`);
       }
     } else if (
       fileExt === "docx" ||
@@ -142,19 +150,19 @@ serve(async (req) => {
       fileExt === "rtf" ||
       fileExt === "odt"
     ) {
+      // We cannot natively parse, so always OCR these
       try {
-        // 2. Always do OCR for non-text files, since we can't parse DOCX directly in Deno
-        textExtractionReason = 'Performing OCR for document type: ' + fileExt;
+        textExtractionReason = `[${fileExt}] Performing OCR for document type.`;
         console.log(textExtractionReason);
         attemptedOcr = true;
         base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
         let ocrText = await ocrDocument(base64File, mimeType);
         ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
-        if (/([a-zA-Z0-9\s.,@]){30,}/.test(ocrText)) {
+        if (ocrText && ocrText.replace(/\s/g, '').length >= 200 && /[a-zA-Z]/.test(ocrText)) {
           extractedText = ocrText;
           console.log(`[OCR] Extracted text: ${ocrText.length} chars from ${fileExt}.`);
         } else {
-          throw new Error('Text extraction failed: Document appears unreadable even with OCR.');
+          throw new Error(`Text extraction failed: ${fileExt.toUpperCase()} unreadable even with OCR.`);
         }
       } catch (ocrErr) {
         console.error(`[${fileExt.toUpperCase()}] OCR failed:`, ocrErr);
@@ -163,7 +171,7 @@ serve(async (req) => {
     } else if (fileExt === "txt") {
       try {
         extractedText = await fileData.text();
-        if (!/([a-zA-Z0-9\s.,@]){30,}/.test(extractedText)) {
+        if (!extractedText || extractedText.replace(/\s/g, '').length < 30) {
           extractedText = '';
           console.warn('Plaintext resume is too short to parse.');
         }
@@ -172,16 +180,16 @@ serve(async (req) => {
         throw new Error(`TXT extraction failed: ${txtErr.message}`);
       }
     } else {
-      // Unknown file type, try OCR as last-resort fallback.
+      // Fallback: OCR any unknown file type
       try {
         attemptedOcr = true;
-        textExtractionReason = 'Unknown or unsupported file type. Attempting OCR...';
+        textExtractionReason = '[UnknownType] Unknown or unsupported file type. Attempting OCR...';
         console.log(textExtractionReason);
 
         base64File = btoa(String.fromCharCode(...new Uint8Array(docBuffer)));
         let ocrText = await ocrDocument(base64File, mimeType);
         ocrText = (ocrText || '').replace(/\s+/g, ' ').trim();
-        if (/([a-zA-Z0-9\s.,@]){30,}/.test(ocrText)) {
+        if (ocrText && ocrText.replace(/\s/g, '').length >= 200 && /[a-zA-Z]/.test(ocrText)) {
           extractedText = ocrText;
           console.log(`[Fallback OCR] Extracted text: ${ocrText.length} chars.`);
         } else {
@@ -197,6 +205,7 @@ serve(async (req) => {
     let cleanText = (extractedText || '').replace(/\s+/g, ' ').trim();
     if (cleanText.length > 4000) cleanText = cleanText.substring(0, 4000);
 
+    // If after all extraction (including OCR), the text is still too short, fail gracefully
     if (cleanText.length < 30) {
       let failMessage = "Text extraction failed. Could not extract enough text for parsing, even using OCR. Please try with a higher-resolution scan or a different format.";
       if (attemptedOcr) {
@@ -205,7 +214,7 @@ serve(async (req) => {
       throw new Error(failMessage);
     }
 
-    console.log(`Proceeding to Groq AI with ${cleanText.length} chars. Extraction method: ${attemptedOcr ? 'OCR' : 'native text'}.`);
+    console.log(`Proceeding to Groq AI with ${cleanText.length} chars. Extraction branch: ${attemptedOcr ? 'OCR' : 'native text'}.`);
 
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
