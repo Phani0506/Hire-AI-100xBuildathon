@@ -45,6 +45,7 @@ const Dashboard = () => {
     checkUser();
   }, [router]);
 
+  // Fetch resumes utility
   const fetchResumes = async (userId: string) => {
     const { data, error } = await supabase
       .from("resumes")
@@ -56,6 +57,31 @@ const Dashboard = () => {
     else setResumes(data as Resume[]);
   };
 
+  // Listen for realtime changes
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel("realtime:resumes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "resumes",
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          // Whenever a change is detected, refresh the list
+          fetchResumes(user.id);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
   const handleFileUpload = async () => {
     if (!file || !user) return;
 
@@ -66,7 +92,6 @@ const Dashboard = () => {
     const filePath = `public/${user.id}/${uuidv4()}-${fileName}`;
 
     try {
-      // Step 1: Create the 'pending' record in the database
       const { data: resumeData, error: insertError } = await supabase
         .from("resumes")
         .insert({ user_id: user.id, file_name: fileName, file_path: filePath, parsing_status: "pending" })
@@ -74,7 +99,6 @@ const Dashboard = () => {
 
       if (insertError) throw insertError;
       
-      // Step 2: Upload the actual file to Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from("resumes")
         .upload(filePath, file, { upsert: false });
@@ -86,7 +110,6 @@ const Dashboard = () => {
       
       toast.success("Resume uploaded. Starting analysis...");
 
-      // THIS IS THE CRITICAL FIX - SENDING THE BODY TO THE FUNCTION
       const { error: invokeError } = await supabase.functions.invoke(
         "parse-resume",
         {
@@ -152,3 +175,4 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
+
