@@ -2,12 +2,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
+// Import PDF.js-extract (browser-compatible) for splitting and extracting PDF images
+import * as pdfjsLib from "https://cdn.skypack.dev/pdfjs-dist@3.11.174/legacy/build/pdf.js";
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type'
 };
 
-// A best-effort PDF text extraction function.
 async function extractTextFromPDF(arrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
@@ -36,6 +38,66 @@ async function extractTextFromPDF(arrayBuffer) {
   }
 }
 
+// Extract images as data URLs from PDF using PDF.js
+async function extractImagesFromPDF(arrayBuffer) {
+  try {
+    const loadingTask = pdfjsLib.getDocument({data: arrayBuffer});
+    const pdf = await loadingTask.promise;
+    const images = [];
+
+    for(let pageNum = 1; pageNum <= pdf.numPages && pageNum <= 5; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const ops = await page.getOperatorList();
+      const objs = page.objs;
+
+      const viewport = page.getViewport({ scale: 2.0 });
+      // Create canvas in JS (simulate HTML canvas)
+      const canvas = new OffscreenCanvas(viewport.width, viewport.height);
+      const context = canvas.getContext('2d');
+      // Render the page into this canvas
+      await page.render({ canvasContext: context, viewport }).promise;
+      // Export to PNG
+      const blob = await canvas.convertToBlob();
+      const arrayBufferImg = await blob.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBufferImg)));
+      images.push(`data:image/png;base64,${base64}`);
+    }
+
+    console.log(`Extracted ${images.length} images from PDF`);
+    return images;
+  } catch (e) {
+    console.error('Failed to extract images from PDF:', e);
+    return [];
+  }
+}
+
+// OCR : Send image to Hugging Face Inference API (returns text)
+async function ocrImage(base64Image) {
+  const HF_TOKEN = Deno.env.get("HUGGING_FACE_ACCESS_TOKEN");
+  if (!HF_TOKEN) throw new Error("Missing Hugging Face token (HUGGING_FACE_ACCESS_TOKEN)");
+
+  const response = await fetch('https://api-inference.huggingface.co/models/microsoft/trocr-base-stage1', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${HF_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      inputs: base64Image
+    })
+  });
+  if (!response.ok) throw new Error('Hugging Face OCR failed: ' + (await response.text()));
+  const result = await response.json();
+  // HF returns either an object {text: "..."} or [{text: "..."}]
+  if (typeof result === "object" && Array.isArray(result) && result.length && result[0].text) {
+    return result.map(x => x.text).join(' ');
+  }
+  if (typeof result === "object" && result.text) {
+    return result.text;
+  }
+  return "";
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -53,7 +115,6 @@ serve(async (req) => {
     
     console.log('Processing resume:', { resumeId, filePath });
     
-    // Use the Service Role Key to bypass RLS for this internal process
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -69,15 +130,27 @@ serve(async (req) => {
     let extractedText = '';
     if (filePath.toLowerCase().endsWith('.pdf')) {
       extractedText = await extractTextFromPDF(await fileData.arrayBuffer());
+      // If text extraction failed or is very short, try OCR for each page
+      if (!/([a-zA-Z0-9\s.,@]){50,}/.test(extractedText)) {
+        console.log('Primary extraction failed or resulted in little text. Running OCR...');
+        const images = await extractImagesFromPDF(await fileData.arrayBuffer());
+        let ocrResult = '';
+        for (const img of images) {
+          const ocrText = await ocrImage(img);
+          ocrResult += ocrText + " ";
+        }
+        ocrResult = ocrResult.replace(/\s+/g, " ").trim();
+        console.log(`OCR extracted ${ocrResult.length} characters`);
+        if (/([a-zA-Z0-9\s.,@]){50,}/.test(ocrResult)) {
+          extractedText = ocrResult;
+        } else {
+          throw new Error('Text extraction failed: PDF is likely not a valid resume or is too empty for OCR.');
+        }
+      }
     } else if (filePath.toLowerCase().endsWith('.txt')) {
       extractedText = await fileData.text();
     } else {
       throw new Error(`Unsupported file type: ${filePath}.`);
-    }
-
-    if (!/([a-zA-Z0-9\s.,@]){50,}/.test(extractedText)) {
-       console.error('Raw extracted text (first 200 chars):', extractedText.substring(0, 200));
-       throw new Error('Text extraction failed or the PDF is image-based.');
     }
 
     let cleanText = extractedText.replace(/\s+/g, ' ').trim();
