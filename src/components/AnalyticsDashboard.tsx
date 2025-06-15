@@ -1,3 +1,4 @@
+
 import { useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
@@ -14,6 +15,43 @@ const chartConfig = {
     label: "Uploads",
     color: "#3b82f6",
   },
+};
+
+// Helper function to normalize location names
+const normalizeLocation = (location: string): string => {
+  if (!location) return 'Unknown';
+  
+  const normalized = location.toLowerCase().trim();
+  
+  // Handle common city variations and geographical groupings
+  const locationMappings: Record<string, string> = {
+    'hyderabad': 'Hyderabad',
+    'bangalore': 'Bangalore',
+    'bengaluru': 'Bangalore',
+    'mumbai': 'Mumbai',
+    'bombay': 'Mumbai',
+    'delhi': 'Delhi',
+    'new delhi': 'Delhi',
+    'chennai': 'Chennai',
+    'madras': 'Chennai',
+    'kolkata': 'Kolkata',
+    'calcutta': 'Kolkata',
+    'pune': 'Pune',
+    'poona': 'Pune',
+    'san francisco': 'San Francisco',
+    'sf': 'San Francisco',
+    'new york': 'New York',
+    'nyc': 'New York',
+    'los angeles': 'Los Angeles',
+    'la': 'Los Angeles',
+  };
+
+  // Split by comma and get the first meaningful part
+  const parts = location.split(',').map(part => part.trim());
+  const primaryLocation = parts[0].toLowerCase();
+
+  // Check if we have a mapping for this location
+  return locationMappings[primaryLocation] || parts[0];
 };
 
 const fetchAnalyticsData = async () => {
@@ -64,9 +102,9 @@ const AnalyticsDashboard = () => {
 
     const locationsCount = parsedDetails
       .reduce((acc, detail) => {
-        const location = detail.location?.split(',')[0]?.trim() || 'Unknown';
-        if (location && location.length > 1) {
-          acc[location] = (acc[location] || 0) + 1;
+        const normalizedLocation = normalizeLocation(detail.location || '');
+        if (normalizedLocation && normalizedLocation !== 'Unknown') {
+          acc[normalizedLocation] = (acc[normalizedLocation] || 0) + 1;
         }
         return acc;
       }, {} as Record<string, number>);
