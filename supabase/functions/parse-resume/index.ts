@@ -45,67 +45,91 @@ async function getGeminiCompletion(prompt: string) {
   return data.candidates[0].content.parts[0].text;
 }
 
-// Improved PDF text extraction
+// Improved PDF text extraction using multiple strategies
 async function extractTextFromPDF(arrayBuffer: ArrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
     let text = '';
     
-    // Convert to string safely
+    // Convert to string safely with better encoding handling
     const decoder = new TextDecoder('utf-8', { fatal: false });
     const pdfAsString = decoder.decode(uint8Array);
     
-    // Extract text from different PDF structures
-    const patterns = [
-      /BT[\s\S]*?ET/g, // Text objects
-      /\((.*?)\)/g,    // Text in parentheses
-      /\[(.*?)\]/g,    // Text in brackets
-      /\/F\d+\s+\d+\s+Tf\s*\((.*?)\)/g, // Font text
-    ];
+    // Strategy 1: Extract from stream objects (most reliable for modern PDFs)
+    const streamPattern = /stream\s*(.*?)\s*endstream/gs;
+    const streams = [...pdfAsString.matchAll(streamPattern)];
     
-    for (const pattern of patterns) {
-      const matches = pdfAsString.match(pattern) || [];
-      for (const match of matches) {
-        let cleanText = match
-          .replace(/BT|ET|Tf|TJ|Tj|'|"/g, ' ')
-          .replace(/\/F\d+\s+\d+\s+/g, ' ')
-          .replace(/[\(\)\[\]]/g, ' ')
-          .replace(/\\n|\\r|\\t/g, ' ')
-          .replace(/\\\(/g, '(')
-          .replace(/\\\)/g, ')')
-          .replace(/\\\\/g, '\\')
-          .replace(/[^\x20-\x7E\u00A0-\u017F]/g, ' ') // Keep only printable ASCII + Latin-1
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        if (cleanText.length > 2 && /[a-zA-Z@.]/.test(cleanText)) {
-          text += cleanText + ' ';
-        }
-      }
-    }
-    
-    // Additional extraction for stream content
-    const streams = pdfAsString.match(/stream([\s\S]*?)endstream/g) || [];
     for (const stream of streams) {
-      const streamContent = stream.replace(/^stream\s*/, '').replace(/\s*endstream$/, '');
-      const textMatches = streamContent.match(/\((.*?)\)/g) || [];
+      const streamContent = stream[1];
       
-      for (const match of textMatches) {
-        let cleanText = match
-          .replace(/[\(\)]/g, '')
-          .replace(/\\n|\\r|\\t/g, ' ')
-          .replace(/\\\(/g, '(')
-          .replace(/\\\)/g, ')')
-          .replace(/\\\\/g, '\\')
-          .replace(/[^\x20-\x7E\u00A0-\u017F]/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        if (cleanText.length > 2 && /[a-zA-Z@.]/.test(cleanText)) {
-          text += cleanText + ' ';
+      // Look for text showing operators with better patterns
+      const textPatterns = [
+        /\((.*?)\)\s*Tj/g,           // Simple text showing
+        /\((.*?)\)\s*TJ/g,           // Text showing with individual glyph positioning
+        /\[(.*?)\]\s*TJ/g,           // Array of strings and numbers
+        /BT\s+(.*?)\s+ET/gs,         // Text objects
+      ];
+      
+      for (const pattern of textPatterns) {
+        const matches = [...streamContent.matchAll(pattern)];
+        for (const match of matches) {
+          let extractedText = match[1];
+          if (extractedText) {
+            // Clean up the extracted text
+            extractedText = extractedText
+              .replace(/\\n/g, ' ')
+              .replace(/\\r/g, ' ')
+              .replace(/\\t/g, ' ')
+              .replace(/\\\(/g, '(')
+              .replace(/\\\)/g, ')')
+              .replace(/\\\\/g, '\\')
+              .replace(/\s+/g, ' ')
+              .trim();
+            
+            if (extractedText.length > 1 && /[a-zA-Z@.]/.test(extractedText)) {
+              text += extractedText + ' ';
+            }
+          }
         }
       }
     }
+    
+    // Strategy 2: Look for text in object content (fallback)
+    if (text.length < 100) {
+      const objPattern = /obj\s*(.*?)\s*endobj/gs;
+      const objects = [...pdfAsString.matchAll(objPattern)];
+      
+      for (const obj of objects) {
+        const objContent = obj[1];
+        // Look for parenthetical text
+        const textMatches = objContent.match(/\((.*?)\)/g) || [];
+        
+        for (const match of textMatches) {
+          let cleanText = match
+            .replace(/[\(\)]/g, '')
+            .replace(/\\n|\\r|\\t/g, ' ')
+            .replace(/\\\(/g, '(')
+            .replace(/\\\)/g, ')')
+            .replace(/\\\\/g, '\\')
+            .replace(/\s+/g, ' ')
+            .trim();
+          
+          if (cleanText.length > 2 && /[a-zA-Z@.]/.test(cleanText)) {
+            text += cleanText + ' ';
+          }
+        }
+      }
+    }
+    
+    // Strategy 3: Direct text extraction (last resort)
+    if (text.length < 50) {
+      // Look for readable ASCII text in the PDF
+      const readableText = pdfAsString.match(/[a-zA-Z][a-zA-Z0-9@.\-\s]{10,}/g) || [];
+      text = readableText.join(' ');
+    }
+    
+    console.log(`PDF extraction resulted in ${text.length} characters of text`);
+    console.log(`Sample extracted text: "${text.substring(0, 300)}"`);
     
     return text.replace(/\s+/g, ' ').trim();
   } catch (error) {
@@ -114,35 +138,58 @@ async function extractTextFromPDF(arrayBuffer: ArrayBuffer) {
   }
 }
 
+// Enhanced text extraction for other file types
+async function extractTextFromFile(fileData: Blob, fileName: string) {
+  const lowerFileName = fileName.toLowerCase();
+  
+  if (lowerFileName.endsWith('.pdf')) {
+    return await extractTextFromPDF(await fileData.arrayBuffer());
+  } else if (lowerFileName.endsWith('.txt')) {
+    return await fileData.text();
+  } else if (lowerFileName.endsWith('.docx')) {
+    // For DOCX, try to extract as text (basic approach)
+    try {
+      const text = await fileData.text();
+      // DOCX files are XML-based, try to extract text content
+      const xmlText = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return xmlText;
+    } catch {
+      return '';
+    }
+  } else {
+    // Try to extract as text for other formats
+    try {
+      return await fileData.text();
+    } catch {
+      return '';
+    }
+  }
+}
+
 // Clean text for database storage
 function cleanTextForDatabase(text: string) {
   if (!text) return '';
   
   return text
-    .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remove control characters
+    .replace(/[\x00-\x1F\x7F-\x9F]/g, ' ') // Remove control characters
     .replace(/[\u2000-\u206F\u2E00-\u2E7F]/g, ' ') // Replace special spaces
-    .replace(/[^\x20-\x7E\u00A0-\u017F]/g, '') // Keep only safe characters
+    .replace(/[^\x20-\x7E\u00A0-\u017F\u0100-\u024F]/g, ' ') // Keep safe characters + extended Latin
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Truncate text to fit within token limits (approximately 3000 tokens = 12000 characters)
-function truncateTextForAI(text: string, maxLength = 12000) {
-  if (text.length <= maxLength) return text;
-  
-  // Try to truncate at word boundaries
-  const truncated = text.substring(0, maxLength);
-  const lastSpaceIndex = truncated.lastIndexOf(' ');
-  
-  return lastSpaceIndex > maxLength * 0.8 ? truncated.substring(0, lastSpaceIndex) : truncated;
-}
-
-// Enhanced AI parsing with Gemini
+// Enhanced AI parsing with better prompts and validation
 async function parseResumeWithAI(text: string) {
-  const truncatedText = truncateTextForAI(text, 15000); // Gemini can handle more tokens
+  if (!text || text.length < 50) {
+    throw new Error('Insufficient text for AI parsing');
+  }
+  
+  // Truncate text to fit within token limits
+  const maxLength = 15000; // Conservative limit for Gemini
+  const truncatedText = text.length > maxLength ? text.substring(0, maxLength) : text;
   
   const aiPrompt = `
-You are an expert resume parser. Extract key information from this resume text and return it as a JSON object with this EXACT structure. DO NOT return any text outside of the JSON object:
+You are an expert resume parser. Extract key information from this resume text and return it as a JSON object with this EXACT structure. Return ONLY the JSON object, no other text:
 
 {
   "full_name": "John Doe",
@@ -168,31 +215,30 @@ You are an expert resume parser. Extract key information from this resume text a
 }
 
 CRITICAL INSTRUCTIONS:
-- Extract the person's ACTUAL full name from the resume (look at the very top, headers, contact sections)
-- Find the ACTUAL email address (look for @ symbols throughout the document)
-- Extract the ACTUAL phone number (look for phone patterns like +1-555-123-4567, (555) 123-4567, etc.)
-- Find the ACTUAL location/address information (city, state, country)
-- List ALL actual skills, technologies, programming languages, tools mentioned in the resume
-- Extract ALL work experience with actual job titles, company names, dates, and descriptions
-- Extract ALL education with actual degrees, schools, and graduation years
-- If any information is not found in the resume, use null for strings and empty arrays for lists
-- Be thorough and extract REAL information from the resume text
-- DO NOT use placeholder data like "John Doe" or "example.com"
+- Extract the person's ACTUAL full name from the resume (NOT "John Doe")
+- Find the ACTUAL email address (look for @ symbols)
+- Extract the ACTUAL phone number (look for phone patterns)
+- Find the ACTUAL location/address information
+- List ALL actual skills, technologies, programming languages mentioned
+- Extract ALL work experience with actual job titles, companies, dates
+- Extract ALL education with actual degrees, schools, years
+- If information is not found, use null for strings and empty arrays for lists
+- Do NOT use placeholder data like "John Doe" or "example.com"
 - Only extract information that is clearly present in the resume
 
-Resume text to parse:
+Resume text:
 ${truncatedText}
 `;
 
   try {
-    console.log('Attempting Gemini AI parsing...');
+    console.log('Sending request to Gemini AI...');
     const aiResult = await getGeminiCompletion(aiPrompt);
-    console.log('Raw Gemini response:', aiResult);
+    console.log('Raw Gemini response:', aiResult.substring(0, 500));
     
-    // Clean the response to ensure it's valid JSON
+    // Clean the response
     let cleanedResult = aiResult.trim();
     
-    // Remove any markdown code block formatting if present
+    // Remove markdown code blocks if present
     if (cleanedResult.startsWith('```json')) {
       cleanedResult = cleanedResult.replace(/^```json\s*/, '').replace(/\s*```$/, '');
     } else if (cleanedResult.startsWith('```')) {
@@ -200,63 +246,90 @@ ${truncatedText}
     }
     
     const parsed = JSON.parse(cleanedResult);
-    console.log('Parsed AI result:', JSON.stringify(parsed, null, 2));
+    console.log('Successfully parsed AI result');
     
-    // Validate and clean the AI result
+    // Validate and clean the result - reject obvious placeholder data
     const result = {
-      full_name: parsed.full_name && typeof parsed.full_name === 'string' && parsed.full_name.trim() !== 'John Doe' ? parsed.full_name.trim() : null,
-      email: parsed.email && typeof parsed.email === 'string' && parsed.email.includes('@') && !parsed.email.includes('example.com') ? parsed.email.trim() : null,
-      phone: parsed.phone && typeof parsed.phone === 'string' && !parsed.phone.includes('555-123-4567') ? parsed.phone.trim() : null,
-      location: parsed.location && typeof parsed.location === 'string' && parsed.location.trim() !== 'New York, NY' ? parsed.location.trim() : null,
-      skills_json: Array.isArray(parsed.skills) ? parsed.skills.filter(s => s && typeof s === 'string' && s.trim() !== 'JavaScript' && s.trim() !== 'React' && s.trim() !== 'Node.js').map(s => s.trim()) : [],
-      experience_json: Array.isArray(parsed.experience) ? parsed.experience.filter(exp => exp && typeof exp === 'object' && exp.company !== 'Tech Company') : [],
-      education_json: Array.isArray(parsed.education) ? parsed.education.filter(edu => edu && typeof edu === 'object' && edu.institution !== 'University Name') : [],
+      full_name: (parsed.full_name && typeof parsed.full_name === 'string' && 
+                  parsed.full_name.trim() !== 'John Doe' && 
+                  parsed.full_name.trim().length > 0) ? parsed.full_name.trim() : null,
+      
+      email: (parsed.email && typeof parsed.email === 'string' && 
+              parsed.email.includes('@') && 
+              !parsed.email.includes('example.com') &&
+              !parsed.email.includes('john@')) ? parsed.email.trim() : null,
+      
+      phone: (parsed.phone && typeof parsed.phone === 'string' && 
+              !parsed.phone.includes('555-123-4567') &&
+              parsed.phone.trim().length > 0) ? parsed.phone.trim() : null,
+      
+      location: (parsed.location && typeof parsed.location === 'string' && 
+                 parsed.location.trim() !== 'New York, NY' &&
+                 parsed.location.trim().length > 0) ? parsed.location.trim() : null,
+      
+      skills_json: Array.isArray(parsed.skills) ? 
+        parsed.skills.filter(s => s && typeof s === 'string' && 
+                             s.trim() !== 'JavaScript' && 
+                             s.trim() !== 'React' && 
+                             s.trim() !== 'Node.js' &&
+                             s.trim().length > 0).map(s => s.trim()) : [],
+      
+      experience_json: Array.isArray(parsed.experience) ? 
+        parsed.experience.filter(exp => exp && typeof exp === 'object' && 
+                                 exp.company !== 'Tech Company' &&
+                                 exp.title && exp.title.length > 0) : [],
+      
+      education_json: Array.isArray(parsed.education) ? 
+        parsed.education.filter(edu => edu && typeof edu === 'object' && 
+                               edu.institution !== 'University Name' &&
+                               edu.degree && edu.degree.length > 0) : [],
     };
     
     console.log('Final validated result:', JSON.stringify(result, null, 2));
     return result;
     
   } catch (error) {
-    console.error('Gemini AI parsing failed:', error.message);
-    console.log('Falling back to regex extraction...');
-    
-    // Enhanced fallback: try to extract basic information using regex
-    return extractBasicInfoWithRegex(truncatedText);
+    console.error('AI parsing failed:', error.message);
+    throw error;
   }
 }
 
-// Enhanced regex-based extraction
+// Enhanced regex-based extraction as fallback
 function extractBasicInfoWithRegex(text: string) {
   console.log('Using regex fallback extraction...');
   
-  // Email extraction
-  const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/);
+  // Email extraction - more comprehensive patterns
+  const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+  const emailMatches = text.match(emailPattern) || [];
+  const email = emailMatches.find(e => !e.includes('example.com') && !e.includes('john@')) || null;
   
-  // Phone extraction (multiple patterns)
+  // Phone extraction - multiple patterns
   const phonePatterns = [
-    /(\+?\d{1,3}[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/,
-    /(\+\d{1,3}\s?)?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/,
-    /\(\d{3}\)\s?\d{3}[-.\s]?\d{4}/
+    /(\+?\d{1,3}[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/g,
+    /(\+\d{1,3}\s?)?\d{3}[-.\s]?\d{3}[-.\s]?\d{4}/g,
+    /\(\d{3}\)\s?\d{3}[-.\s]?\d{4}/g
   ];
   
-  let phoneMatch = null;
+  let phone = null;
   for (const pattern of phonePatterns) {
-    phoneMatch = text.match(pattern);
-    if (phoneMatch) break;
+    const matches = text.match(pattern);
+    if (matches && matches.length > 0) {
+      phone = matches[0];
+      break;
+    }
   }
   
-  // Name extraction (improved)
-  const lines = text.split('\n').filter(line => line.trim().length > 0);
+  // Name extraction - look for names at the beginning
+  const lines = text.split(/[\n\r]+/).filter(line => line.trim().length > 0);
   let possibleName = null;
   
-  for (let i = 0; i < Math.min(10, lines.length); i++) {
+  for (let i = 0; i < Math.min(5, lines.length); i++) {
     const line = lines[i].trim();
-    // Look for lines that could be names (2-4 words, proper case, no special chars)
-    if (line.length > 3 && line.length < 60 && 
-        /^[A-Z][a-zA-Z\s]+$/.test(line) && 
+    // Look for lines that could be names
+    if (line.length > 3 && line.length < 50 && 
+        /^[A-Z][a-zA-Z\s.'-]+$/.test(line) && 
         !line.toLowerCase().includes('resume') &&
         !line.toLowerCase().includes('cv') &&
-        !line.toLowerCase().includes('curriculum') &&
         !line.includes('@') &&
         !line.match(/\d{3,}/) &&
         line.split(' ').length >= 2 && line.split(' ').length <= 4) {
@@ -265,8 +338,14 @@ function extractBasicInfoWithRegex(text: string) {
     }
   }
   
-  // Skills extraction (look for common skill keywords)
-  const skillKeywords = ['javascript', 'python', 'java', 'react', 'node', 'sql', 'html', 'css', 'angular', 'vue', 'php', 'c++', 'c#', 'ruby', 'swift', 'kotlin', 'go', 'rust', 'typescript', 'aws', 'docker', 'kubernetes', 'git', 'mongodb', 'postgresql', 'mysql', 'redis', 'firebase', 'azure', 'gcp'];
+  // Skills extraction
+  const skillKeywords = [
+    'javascript', 'python', 'java', 'react', 'node', 'sql', 'html', 'css', 
+    'angular', 'vue', 'php', 'c++', 'c#', 'ruby', 'swift', 'kotlin', 'go', 
+    'rust', 'typescript', 'aws', 'docker', 'kubernetes', 'git', 'mongodb', 
+    'postgresql', 'mysql', 'redis', 'firebase', 'azure', 'gcp'
+  ];
+  
   const foundSkills = [];
   const lowerText = text.toLowerCase();
   
@@ -276,22 +355,20 @@ function extractBasicInfoWithRegex(text: string) {
     }
   }
   
-  // Location extraction (look for city, state patterns)
-  const locationPattern = /([A-Z][a-zA-Z\s]+),\s*([A-Z]{2}|[A-Z][a-zA-Z\s]+)/;
-  const locationMatch = text.match(locationPattern);
+  // Location extraction
+  const locationPattern = /([A-Z][a-zA-Z\s]+),\s*([A-Z]{2}|[A-Z][a-zA-Z\s]+)/g;
+  const locationMatches = text.match(locationPattern) || [];
+  const location = locationMatches[0] || null;
   
-  const result = {
+  return {
     full_name: possibleName,
-    email: emailMatch ? emailMatch[0] : null,
-    phone: phoneMatch ? phoneMatch[0] : null,
-    location: locationMatch ? locationMatch[0] : null,
+    email: email,
+    phone: phone,
+    location: location,
     skills_json: foundSkills,
     experience_json: [],
     education_json: [],
   };
-  
-  console.log('Regex extraction result:', JSON.stringify(result, null, 2));
-  return result;
 }
 
 // Main Server Logic
@@ -333,26 +410,13 @@ serve(async (req) => {
 
     console.log(`File downloaded successfully: ${filePath}`);
 
-    // Extract text from different file types
-    let rawText = '';
-    const fileName = filePath.toLowerCase();
+    // Extract text from the file
+    const fileName = filePath.split('/').pop() || 'unknown';
+    let rawText = await extractTextFromFile(fileData, fileName);
     
-    if (fileName.endsWith('.pdf')) {
-      rawText = await extractTextFromPDF(await fileData.arrayBuffer());
-    } else if (fileName.endsWith('.txt')) {
-      rawText = await fileData.text();
-    } else {
-      // Try to extract as text for other formats
-      try {
-        rawText = await fileData.text();
-      } catch {
-        rawText = '';
-      }
-    }
-
     let cleanText = cleanTextForDatabase(rawText);
     console.log(`Text extracted and cleaned, length: ${cleanText.length} characters`);
-    console.log(`First 200 characters: ${cleanText.substring(0, 200)}`);
+    console.log(`Sample text: "${cleanText.substring(0, 200)}"`);
 
     // Get resume user_id
     const { data: resumeData, error: resumeError } = await serviceClient
@@ -388,11 +452,11 @@ serve(async (req) => {
           ...aiParsedData
         };
         
-        console.log(`Successfully parsed content:`, JSON.stringify(parsedContent, null, 2));
+        console.log(`AI parsing successful for resume ${resumeId}`);
         
       } catch (aiError) {
         console.error(`AI parsing failed: ${aiError.message}`);
-        console.log('Using fallback extraction...');
+        console.log('Falling back to regex extraction...');
         
         // Try regex fallback
         const fallbackData = extractBasicInfoWithRegex(cleanText);
@@ -403,7 +467,18 @@ serve(async (req) => {
       }
     } else {
       console.log(`Insufficient text for parsing (${cleanText.length} characters)`);
+      
+      // If we have very little text, try regex extraction anyway
+      if (cleanText.length > 10) {
+        const fallbackData = extractBasicInfoWithRegex(cleanText);
+        parsedContent = {
+          ...parsedContent,
+          ...fallbackData
+        };
+      }
     }
+
+    console.log('Final parsed content:', JSON.stringify(parsedContent, null, 2));
 
     // Insert the parsed data into the database
     const { error: insertError } = await serviceClient
@@ -463,7 +538,7 @@ serve(async (req) => {
           })
           .eq('id', resumeId);
       } catch (e) { 
-        console.error('Fatal error updating status:', e); 
+        console.error('Failed to update status to failed:', e); 
       }
     }
     
