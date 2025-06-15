@@ -40,7 +40,7 @@ serve(async (req) => {
       if (ext === 'txt') {
         text = await fileData.text();
       } else if (ext === 'pdf') {
-        // Basic attempt for PDF text, but do not restrict parsing if this fails
+        // Attempt naive PDF text extraction, but do not restrict parsing if this fails
         try {
           const uint8Array = new Uint8Array(await fileData.arrayBuffer());
           let pdfAsString = '';
@@ -60,8 +60,10 @@ serve(async (req) => {
           text = null;
         }
       } else if (["doc", "docx", "rtf", "odt"].includes(ext)) {
+        // Placeholder for document types
         text = `[${ext}] parsing placeholder: No text extracted, but parsing anyway.`;
       } else if (["jpg", "jpeg", "png", "webp"].includes(ext)) {
+        // Placeholder for images
         text = "[IMAGE FILE] No text extracted, but parsing anyway.";
       } else {
         text = `[${ext}] file type - no extraction, but parsing anyway.`;
@@ -76,6 +78,7 @@ serve(async (req) => {
     if (cleanText.length > 4000) cleanText = cleanText.substring(0, 4000);
 
     // AI Parsing (try for all files, fallback gracefully)
+    // We'll parse ALL files, and always map fields correctly for the DB
     let groqResult = {
       full_name: null,
       email: null,
@@ -84,7 +87,7 @@ serve(async (req) => {
       summary: null,
       skills: [],
       experience: [],
-      education: []
+      education: [],
     };
     let aiSuccess = false;
     try {
@@ -97,15 +100,31 @@ serve(async (req) => {
         body: JSON.stringify({
           model: 'llama3-8b-8192',
           messages: [
-            { role: 'system', content: 'You are an expert resume parsing assistant. Your response MUST be a single, valid JSON object with these fields: "full_name", "email", "phone", "location", "summary", "skills" (array of strings), "experience" (array of objects with "title", "company", "duration", "description"), "education" (array with "degree", "institution", "year"). Use null or empty arrays for missing fields.' },
+            { role: 'system', content: 'You are an expert resume parsing assistant. Your response MUST be a single, valid JSON object with these fields: "full_name", "email", "phone", "location", "skills" (array of strings), "experience" (array of objects with "title", "company", "duration", "description"), "education" (array with "degree", "institution", "year"). Use null or empty arrays for missing fields.' },
             { role: 'user', content: `Extract from this resume: ${cleanText}` }
           ],
           response_format: { type: "json_object" },
-          temperature: 0.1,
+          temperature: 0.07,
         })
       });
       if (groqResponse.ok) {
-        groqResult = JSON.parse((await groqResponse.json()).choices[0].message.content);
+        const groqPayload = await groqResponse.json();
+        let parsedGroq = {};
+        try {
+          parsedGroq = JSON.parse(groqPayload.choices[0].message.content);
+        } catch {
+          parsedGroq = groqPayload.choices[0]?.message?.content ?? {};
+        }
+        groqResult = {
+          full_name: parsedGroq.full_name ?? null,
+          email: parsedGroq.email ?? null,
+          phone: parsedGroq.phone ?? null,
+          location: parsedGroq.location ?? null,
+          summary: parsedGroq.summary ?? null,
+          skills: Array.isArray(parsedGroq.skills) ? parsedGroq.skills : (parsedGroq.skills ? [parsedGroq.skills] : []),
+          experience: Array.isArray(parsedGroq.experience) ? parsedGroq.experience : [],
+          education: Array.isArray(parsedGroq.education) ? parsedGroq.education : [],
+        };
         aiSuccess = true;
       }
     } catch (e) {
@@ -113,19 +132,30 @@ serve(async (req) => {
       console.log('Groq AI parsing failed:', e);
     }
 
-    // Ensure basic details
+    // Map AI result to DB fields, using JSONB for arrays
+    const parsedDetailInsert = {
+      resume_id: resumeId,
+      // need user_id:
+      user_id: null as string | null,
+      full_name: groqResult.full_name,
+      email: groqResult.email,
+      phone: groqResult.phone,
+      location: groqResult.location,
+      skills_json: groqResult.skills ?? [],
+      experience_json: groqResult.experience ?? [],
+      education_json: groqResult.education ?? [],
+      raw_text_content: cleanText,
+    };
+
+    // Fetch user_id from resumes table
     const { data: resumeData } = await serviceClient
       .from('resumes').select('user_id').eq('id', resumeId).single();
 
     if (!resumeData) throw new Error(`Resume with ID ${resumeId} not found.`);
+    parsedDetailInsert.user_id = resumeData.user_id;
 
     // Always insert a row, even if parsing failed or content is empty
-    await serviceClient.from('parsed_resume_details').insert({
-      resume_id: resumeId,
-      user_id: resumeData.user_id,
-      ...groqResult,
-      raw_text_content: cleanText,
-    });
+    await serviceClient.from('parsed_resume_details').insert(parsedDetailInsert);
 
     await serviceClient.from('resumes').update({ parsing_status: 'completed' }).eq('id', resumeId);
 
@@ -146,10 +176,9 @@ serve(async (req) => {
           email: null,
           phone: null,
           location: null,
-          summary: error?.message || "Resume file was not parsable.",
-          skills: [],
-          experience: [],
-          education: [],
+          skills_json: [],
+          experience_json: [],
+          education_json: [],
           raw_text_content: "Error or unsupported file format. No details could be extracted."
         });
       } catch (e2) {
