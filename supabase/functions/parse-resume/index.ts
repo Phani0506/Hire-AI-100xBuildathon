@@ -26,31 +26,89 @@ async function getGroqCompletion(prompt, model = 'llama3-8b-8192') {
   return groqData.choices[0].message.content;
 }
 
-// Best-effort PDF text extraction
+// Improved PDF text extraction with better Unicode handling
 async function extractTextFromPDF(arrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
-    let text = '', pdfAsString = '';
-    for (let i = 0; i < uint8Array.length; i++) pdfAsString += String.fromCharCode(uint8Array[i]);
+    let text = '';
+    
+    // Convert to string more safely
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const pdfAsString = decoder.decode(uint8Array);
+    
+    // Look for text objects and streams
+    const textMatches = pdfAsString.match(/\((.*?)\)/g) || [];
     const streamMatches = pdfAsString.match(/stream([\s\S]*?)endstream/g) || [];
+    
+    // Extract text from parentheses (direct text objects)
+    for (const match of textMatches) {
+      const content = match.slice(1, -1)
+        .replace(/\\n/g, ' ')
+        .replace(/\\r/g, ' ')
+        .replace(/\\t/g, ' ')
+        .replace(/\\\(/g, '(')
+        .replace(/\\\)/g, ')')
+        .replace(/\\\\/g, '\\');
+      
+      if (content.length > 2 && /[a-zA-Z@.]/.test(content)) {
+        text += content + ' ';
+      }
+    }
+    
+    // Extract text from streams
     for (const stream of streamMatches) {
       const content = stream.replace(/^stream\r?\n/, '').replace(/\r?\nendstream$/, '');
-      const textMatches = content.match(/\((.*?)\)/g) || [];
-      textMatches.forEach((match) => {
-        const cleaned = match.slice(1, -1).replace(/\\(r|n|t)/g, ' ').replace(/\\/g, '').trim();
-        if (cleaned.length > 2 && /[a-zA-Z]/.test(cleaned)) text += cleaned + ' ';
-      });
+      const streamTextMatches = content.match(/\((.*?)\)/g) || [];
+      
+      for (const match of streamTextMatches) {
+        const cleaned = match.slice(1, -1)
+          .replace(/\\n/g, ' ')
+          .replace(/\\r/g, ' ')
+          .replace(/\\t/g, ' ')
+          .replace(/\\\(/g, '(')
+          .replace(/\\\)/g, ')')
+          .replace(/\\\\/g, '\\');
+        
+        if (cleaned.length > 2 && /[a-zA-Z@.]/.test(cleaned)) {
+          text += cleaned + ' ';
+        }
+      }
     }
-    return text.replace(/\s+/g, ' ').trim();
-  } catch { 
-    return ''; 
+    
+    // Clean up the extracted text
+    text = text
+      .replace(/\s+/g, ' ')
+      .replace(/[^\x20-\x7E\u00A0-\u017F\u0100-\u024F]/g, '') // Remove problematic Unicode
+      .trim();
+    
+    return text;
+  } catch (error) {
+    console.error('PDF extraction error:', error);
+    return '';
   }
+}
+
+// Clean text to remove problematic characters
+function cleanTextForDatabase(text) {
+  if (!text) return '';
+  
+  return text
+    .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remove control characters
+    .replace(/[\u2000-\u206F\u2E00-\u2E7F\u3000-\u303F]/g, ' ') // Replace various Unicode spaces
+    .replace(/[^\x20-\x7E\u00A0-\u017F\u0100-\u024F\u0400-\u04FF]/g, '') // Keep only safe Unicode ranges
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // Main Server Logic
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' } });
+    return new Response(null, { 
+      headers: { 
+        'Access-Control-Allow-Origin': '*', 
+        'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type' 
+      } 
+    });
   }
 
   let resumeId;
@@ -82,25 +140,27 @@ serve(async (req) => {
     console.log(`File downloaded successfully: ${filePath}`);
 
     // Extract text from different file types
-    let text = '';
+    let rawText = '';
     const fileName = filePath.toLowerCase();
     
     if (fileName.endsWith('.pdf')) {
-      text = await extractTextFromPDF(await fileData.arrayBuffer());
+      rawText = await extractTextFromPDF(await fileData.arrayBuffer());
     } else if (fileName.endsWith('.txt')) {
-      text = await fileData.text();
+      rawText = await fileData.text();
     } else {
-      // For other file types (doc, docx, images), we'll try to extract what we can
+      // For other file types, try to extract what we can
       try {
-        text = await fileData.text();
+        rawText = await fileData.text();
       } catch {
-        text = ''; // If we can't extract text, we'll proceed with empty text
+        rawText = ''; // If we can't extract text, proceed with empty text
       }
     }
 
-    console.log(`Text extracted, length: ${text.length} characters`);
+    // Clean the text for database storage
+    let cleanText = cleanTextForDatabase(rawText);
+    console.log(`Text extracted and cleaned, length: ${cleanText.length} characters`);
 
-    let cleanText = text.replace(/\s+/g, ' ').trim();
+    // Limit text length for processing
     if (cleanText.length > 8000) {
       cleanText = cleanText.substring(0, 8000);
     }
@@ -116,6 +176,7 @@ serve(async (req) => {
       throw new Error(`Resume with ID ${resumeId} not found: ${resumeError?.message}`);
     }
 
+    // Initialize default parsed content
     let parsedContent = {
       full_name: null,
       email: null,
@@ -127,25 +188,41 @@ serve(async (req) => {
       raw_text_content: cleanText
     };
 
-    // Only try AI parsing if we have sufficient text
+    // Only try AI parsing if we have sufficient clean text
     if (cleanText.length > 50) {
       console.log(`Attempting AI parsing for resume ${resumeId}...`);
       
       try {
-        // Single comprehensive parsing call
         const aiPrompt = `
-Extract resume information from the following text and return it as a JSON object with this exact structure:
+You are a resume parser. Extract information from the following resume text and return it as a JSON object with this exact structure:
+
 {
-  "full_name": "candidate's full name or null",
-  "email": "email address or null", 
-  "phone": "phone number or null",
-  "location": "city, state/country or null",
-  "skills": ["skill1", "skill2", "skill3"],
-  "experience": [{"title": "job title", "company": "company name", "duration": "time period", "description": "brief description"}],
-  "education": [{"degree": "degree name", "institution": "school name", "year": "graduation year"}]
+  "full_name": "John Doe",
+  "email": "john@example.com", 
+  "phone": "+1-555-123-4567",
+  "location": "New York, NY",
+  "skills": ["JavaScript", "React", "Node.js"],
+  "experience": [
+    {
+      "title": "Software Engineer",
+      "company": "Tech Company", 
+      "duration": "2020-2023",
+      "description": "Developed web applications"
+    }
+  ],
+  "education": [
+    {
+      "degree": "Bachelor of Science in Computer Science",
+      "institution": "University Name",
+      "year": "2020"
+    }
+  ]
 }
 
-Resume text: "${cleanText}"
+Extract as much information as possible. If a field is not found, use null for strings or empty array for arrays.
+
+Resume text:
+${cleanText}
 `;
 
         const aiResult = await getGroqCompletion(aiPrompt);
@@ -153,12 +230,12 @@ Resume text: "${cleanText}"
         
         const parsed = JSON.parse(aiResult);
         
-        // Map the AI result to our database structure
+        // Map the AI result to our database structure with proper validation
         parsedContent = {
-          full_name: parsed.full_name || null,
-          email: parsed.email || null,
-          phone: parsed.phone || null,
-          location: parsed.location || null,
+          full_name: typeof parsed.full_name === 'string' ? parsed.full_name : null,
+          email: typeof parsed.email === 'string' ? parsed.email : null,
+          phone: typeof parsed.phone === 'string' ? parsed.phone : null,
+          location: typeof parsed.location === 'string' ? parsed.location : null,
           skills_json: Array.isArray(parsed.skills) ? parsed.skills : [],
           experience_json: Array.isArray(parsed.experience) ? parsed.experience : [],
           education_json: Array.isArray(parsed.education) ? parsed.education : [],
@@ -169,7 +246,7 @@ Resume text: "${cleanText}"
         
       } catch (aiError) {
         console.error(`AI parsing failed: ${aiError.message}`);
-        // Continue with empty parsedContent - we'll still insert the record
+        // Continue with default parsedContent - we'll still insert the record
       }
     } else {
       console.log(`Insufficient text for AI parsing (${cleanText.length} characters)`);
