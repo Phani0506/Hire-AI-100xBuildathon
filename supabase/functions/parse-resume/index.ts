@@ -1,8 +1,9 @@
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 
 // Helper Function to Call Google AI (Gemini) with better token handling
-async function getGeminiCompletion(prompt) {
+async function getGeminiCompletion(prompt: string) {
   const apiKey = Deno.env.get('GOOGLE_AI_API_KEY');
   
   if (!apiKey) {
@@ -45,7 +46,7 @@ async function getGeminiCompletion(prompt) {
 }
 
 // Improved PDF text extraction
-async function extractTextFromPDF(arrayBuffer) {
+async function extractTextFromPDF(arrayBuffer: ArrayBuffer) {
   try {
     const uint8Array = new Uint8Array(arrayBuffer);
     let text = '';
@@ -114,7 +115,7 @@ async function extractTextFromPDF(arrayBuffer) {
 }
 
 // Clean text for database storage
-function cleanTextForDatabase(text) {
+function cleanTextForDatabase(text: string) {
   if (!text) return '';
   
   return text
@@ -126,7 +127,7 @@ function cleanTextForDatabase(text) {
 }
 
 // Truncate text to fit within token limits (approximately 3000 tokens = 12000 characters)
-function truncateTextForAI(text, maxLength = 12000) {
+function truncateTextForAI(text: string, maxLength = 12000) {
   if (text.length <= maxLength) return text;
   
   // Try to truncate at word boundaries
@@ -137,7 +138,7 @@ function truncateTextForAI(text, maxLength = 12000) {
 }
 
 // Enhanced AI parsing with Gemini
-async function parseResumeWithAI(text) {
+async function parseResumeWithAI(text: string) {
   const truncatedText = truncateTextForAI(text, 15000); // Gemini can handle more tokens
   
   const aiPrompt = `
@@ -225,7 +226,7 @@ ${truncatedText}
 }
 
 // Enhanced regex-based extraction
-function extractBasicInfoWithRegex(text) {
+function extractBasicInfoWithRegex(text: string) {
   console.log('Using regex fallback extraction...');
   
   // Email extraction
@@ -291,98 +292,6 @@ function extractBasicInfoWithRegex(text) {
   
   console.log('Regex extraction result:', JSON.stringify(result, null, 2));
   return result;
-}
-
-// Truncate text to fit within token limits (approximately 3000 tokens = 12000 characters)
-function truncateTextForAI(text, maxLength = 12000) {
-  if (text.length <= maxLength) return text;
-  
-  // Try to truncate at word boundaries
-  const truncated = text.substring(0, maxLength);
-  const lastSpaceIndex = truncated.lastIndexOf(' ');
-  
-  return lastSpaceIndex > maxLength * 0.8 ? truncated.substring(0, lastSpaceIndex) : truncated;
-}
-
-// Clean text for database storage
-function cleanTextForDatabase(text) {
-  if (!text) return '';
-  
-  return text
-    .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remove control characters
-    .replace(/[\u2000-\u206F\u2E00-\u2E7F]/g, ' ') // Replace special spaces
-    .replace(/[^\x20-\x7E\u00A0-\u017F]/g, '') // Keep only safe characters
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// Improved PDF text extraction
-async function extractTextFromPDF(arrayBuffer) {
-  try {
-    const uint8Array = new Uint8Array(arrayBuffer);
-    let text = '';
-    
-    // Convert to string safely
-    const decoder = new TextDecoder('utf-8', { fatal: false });
-    const pdfAsString = decoder.decode(uint8Array);
-    
-    // Extract text from different PDF structures
-    const patterns = [
-      /BT[\s\S]*?ET/g, // Text objects
-      /\((.*?)\)/g,    // Text in parentheses
-      /\[(.*?)\]/g,    // Text in brackets
-      /\/F\d+\s+\d+\s+Tf\s*\((.*?)\)/g, // Font text
-    ];
-    
-    for (const pattern of patterns) {
-      const matches = pdfAsString.match(pattern) || [];
-      for (const match of matches) {
-        let cleanText = match
-          .replace(/BT|ET|Tf|TJ|Tj|'|"/g, ' ')
-          .replace(/\/F\d+\s+\d+\s+/g, ' ')
-          .replace(/[\(\)\[\]]/g, ' ')
-          .replace(/\\n|\\r|\\t/g, ' ')
-          .replace(/\\\(/g, '(')
-          .replace(/\\\)/g, ')')
-          .replace(/\\\\/g, '\\')
-          .replace(/[^\x20-\x7E\u00A0-\u017F]/g, ' ') // Keep only printable ASCII + Latin-1
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        if (cleanText.length > 2 && /[a-zA-Z@.]/.test(cleanText)) {
-          text += cleanText + ' ';
-        }
-      }
-    }
-    
-    // Additional extraction for stream content
-    const streams = pdfAsString.match(/stream([\s\S]*?)endstream/g) || [];
-    for (const stream of streams) {
-      const streamContent = stream.replace(/^stream\s*/, '').replace(/\s*endstream$/, '');
-      const textMatches = streamContent.match(/\((.*?)\)/g) || [];
-      
-      for (const match of textMatches) {
-        let cleanText = match
-          .replace(/[\(\)]/g, '')
-          .replace(/\\n|\\r|\\t/g, ' ')
-          .replace(/\\\(/g, '(')
-          .replace(/\\\)/g, ')')
-          .replace(/\\\\/g, '\\')
-          .replace(/[^\x20-\x7E\u00A0-\u017F]/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        if (cleanText.length > 2 && /[a-zA-Z@.]/.test(cleanText)) {
-          text += cleanText + ' ';
-        }
-      }
-    }
-    
-    return text.replace(/\s+/g, ' ').trim();
-  } catch (error) {
-    console.error('PDF extraction error:', error);
-    return '';
-  }
 }
 
 // Main Server Logic

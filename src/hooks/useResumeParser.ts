@@ -24,6 +24,11 @@ export const useResumeParser = () => {
         return false;
       }
 
+      console.log('Invoking parse-resume function with data:', {
+        resumeId: resumeId,
+        filePath: resumeData.supabase_storage_path
+      });
+
       const { data, error } = await supabase.functions.invoke('parse-resume', {
         body: { 
           resumeId: resumeId,
@@ -42,7 +47,20 @@ export const useResumeParser = () => {
       }
 
       console.log('Resume parsing response:', data);
-      return true;
+      
+      if (data.success) {
+        toast({
+          title: "Resume parsed successfully",
+          description: "Your resume has been processed and parsed.",
+        });
+        return true;
+      } else {
+        toast({
+          title: "Parsing completed with warnings",
+          description: "Resume was processed but some information may not have been extracted.",
+        });
+        return true;
+      }
     } catch (error) {
       console.error('Resume parsing error:', error);
       toast({
