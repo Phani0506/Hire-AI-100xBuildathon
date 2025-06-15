@@ -1,101 +1,154 @@
 
 "use client";
-import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import React, { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+import { v4 as uuidv4 } from "uuid";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import ResumeUpload from "@/components/ResumeUpload";
-import { toast } from "@/hooks/use-toast";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { toast } from "sonner";
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 
-type Resume = {
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+interface Resume {
   id: string;
   file_name: string;
-  supabase_storage_path: string;
-  parsing_status: string;
-};
+  parsing_status: "pending" | "completed" | "failed";
+  created_at: string;
+}
 
-export default function DashboardPage() {
+const Dashboard = () => {
+  const [user, setUser] = useState<any>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [resumes, setResumes] = useState<Resume[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  async function fetchResumes() {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("resumes")
-      .select("id, file_name, supabase_storage_path, parsing_status")
-      .order("created_at", { ascending: false });
-    if (error) {
-      toast({
-        title: "Error",
-        description: "Unable to fetch resumes",
-        variant: "destructive",
-      });
-      setResumes([]);
-    } else {
-      setResumes(data);
-    }
-    setLoading(false);
-  }
+  const router = useRouter();
 
   useEffect(() => {
-    fetchResumes();
-  }, []);
-
-  const handleParseResume = async (resume: Resume) => {
-    try {
-      const { data, error } = await supabase.functions.invoke("parse-resume", {
-        body: {
-          resumeId: resume.id,
-          filePath: resume.supabase_storage_path,
-        },
-      });
-      if (error) {
-        toast({
-          title: "Parsing Error",
-          description: "Failed to parse this resume.",
-          variant: "destructive",
-        });
+    const checkUser = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setUser(session.user);
+        fetchResumes(session.user.id);
       } else {
-        toast({
-          title: "Parsing Complete",
-          description: `Resume "${resume.file_name}" parsed successfully.`,
-        });
-        fetchResumes();
+        router.push("/login");
       }
-    } catch (err) {
-      toast({
-        title: "Parsing Failed",
-        description: "There was an error parsing the resume.",
-        variant: "destructive",
-      });
+    };
+    checkUser();
+  }, [router]);
+
+  const fetchResumes = async (userId: string) => {
+    const { data, error } = await supabase
+      .from("resumes")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) toast.error("Failed to fetch resumes.");
+    else setResumes(data as Resume[]);
+  };
+
+  const handleFileUpload = async () => {
+    if (!file || !user) return;
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    const fileName = file.name;
+    const filePath = `public/${user.id}/${uuidv4()}-${fileName}`;
+
+    try {
+      // Step 1: Create the 'pending' record in the database
+      const { data: resumeData, error: insertError } = await supabase
+        .from("resumes")
+        .insert({ user_id: user.id, file_name: fileName, file_path: filePath, parsing_status: "pending" })
+        .select().single();
+
+      if (insertError) throw insertError;
+      
+      // Step 2: Upload the actual file to Supabase Storage
+      const { error: uploadError } = await supabase.storage
+        .from("resumes")
+        .upload(filePath, file, { upsert: false });
+
+      if (uploadError) {
+        await supabase.from("resumes").delete().eq("id", resumeData.id); // Clean up failed upload
+        throw uploadError;
+      }
+      
+      toast.success("Resume uploaded. Starting analysis...");
+
+      // THIS IS THE CRITICAL FIX - SENDING THE BODY TO THE FUNCTION
+      const { error: invokeError } = await supabase.functions.invoke(
+        "parse-resume",
+        {
+          body: {
+            resumeId: resumeData.id,
+            filePath: filePath,
+          },
+        }
+      );
+      
+      if (invokeError) throw invokeError;
+      
+      toast.info("Analysis in progress. The page will update when complete.");
+
+    } catch (error: any) {
+      toast.error(`An error occurred: ${error.message}`);
+    } finally {
+      setUploading(false);
+      setFile(null);
     }
   };
 
+  if (!user) return <div>Loading...</div>;
+
   return (
-    <main className="max-w-3xl mx-auto p-4 space-y-8">
-      <h1 className="text-3xl font-bold text-center mb-4">Dashboard</h1>
-      <ResumeUpload />
-      <section>
-        <h2 className="text-xl font-semibold mb-2">Your Resumes</h2>
-        {loading ? (
-          <p>Loading...</p>
-        ) : resumes.length === 0 ? (
-          <p className="text-gray-400">No resumes uploaded yet.</p>
-        ) : (
-          <ul className="divide-y">
-            {resumes.map((r) => (
-              <li key={r.id} className="py-4 flex items-center justify-between">
-                <div>
-                  <strong>{r.file_name}</strong>
-                  <span className="ml-2 text-xs text-gray-500">{r.parsing_status}</span>
-                </div>
-                <Button onClick={() => handleParseResume(r)} size="sm">
-                  Parse Resume with AI
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </main>
+    <div className="container mx-auto p-4">
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <Button variant="outline" onClick={() => supabase.auth.signOut()}>Logout</Button>
+      </div>
+      <p className="mb-6">Welcome, {user.email}</p>
+
+      <div className="mb-8 p-6 border rounded-lg bg-card">
+        <h2 className="text-xl font-semibold mb-4">Upload New Resume</h2>
+        <div className="grid w-full max-w-sm items-center gap-1.5">
+          <Label htmlFor="resume">Select a .pdf or .txt file</Label>
+          <Input id="resume" type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} accept=".pdf,.txt" />
+        </div>
+        <Button onClick={handleFileUpload} disabled={!file || uploading} className="mt-4">
+          {uploading ? "Uploading..." : "Upload and Analyze"}
+        </Button>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold mb-4">Your Resumes</h2>
+        <div className="space-y-4">
+          {resumes.length === 0 && <p>You have not uploaded any resumes yet.</p>}
+          {resumes.map((resume) => (
+            <div key={resume.id} className="p-4 border rounded-lg flex justify-between items-center">
+              <div>
+                <p className="font-medium">{resume.file_name}</p>
+                <p className="text-sm text-gray-500">Status: <span className={`font-semibold ${resume.parsing_status === 'completed' ? 'text-green-600' : resume.parsing_status === 'failed' ? 'text-red-600' : 'text-yellow-600'}`}>{resume.parsing_status}</span></p>
+              </div>
+              {resume.parsing_status === 'completed' && (
+                <Link href={`/resume/${resume.id}`}><Button variant="outline">View Details <ArrowRight className="ml-2 h-4 w-4" /></Button></Link>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
-}
+};
+
+export default Dashboard;
