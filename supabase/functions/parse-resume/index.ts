@@ -44,19 +44,30 @@ serve(async (req) => {
   let resumeId;
   try {
     const requestBody = await req.json();
-    resumeId = requestBody.resumeId; 
-    const { filePath } = requestBody;
 
+    // ** THE FIX: Handle both Webhook and direct invoke **
+    let filePath;
+    // Check if this is a webhook invocation
+    if (requestBody.record) {
+      console.log('Processing via webhook...');
+      resumeId = requestBody.record.id;
+      filePath = requestBody.record.file_path;
+    } else { // This is a direct invocation
+      console.log('Processing via direct invoke...');
+      resumeId = requestBody.resumeId;
+      filePath = requestBody.filePath;
+    }
+    
     if (!resumeId || !filePath) {
-      throw new Error('Missing resumeId or filePath in the request body.');
+      throw new Error(`Missing resumeId or filePath in the request body. Body received: ${JSON.stringify(requestBody)}`);
     }
     
     console.log('Processing resume:', { resumeId, filePath });
-
+    
+    // Use the Service Role Key to bypass RLS for this internal process
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
     const { data: fileData, error: downloadError } = await supabaseClient
@@ -67,26 +78,23 @@ serve(async (req) => {
     if (downloadError) throw new Error(`Failed to download file: ${downloadError.message}`);
 
     let extractedText = '';
-    const lowerFilePath = filePath.toLowerCase();
-
-    if (lowerFilePath.endsWith('.pdf')) {
+    if (filePath.toLowerCase().endsWith('.pdf')) {
       extractedText = await extractTextFromPDF(await fileData.arrayBuffer());
-    } else if (lowerFilePath.endsWith('.txt')) {
+    } else if (filePath.toLowerCase().endsWith('.txt')) {
       extractedText = await fileData.text();
     } else {
-      throw new Error(`Unsupported file type: ${filePath}. Please upload a PDF or TXT file.`);
+      throw new Error(`Unsupported file type: ${filePath}.`);
     }
 
-    if (!/([a-zA-Z0-9\s.,@]){100,}/.test(extractedText)) {
-       console.error('Raw extracted text (first 500 chars):', extractedText.substring(0, 500));
-       throw new Error('Text extraction failed or the PDF is image-based. Could not find readable content.');
+    if (!/([a-zA-Z0-9\s.,@]){50,}/.test(extractedText)) {
+       console.error('Raw extracted text (first 200 chars):', extractedText.substring(0, 200));
+       throw new Error('Text extraction failed or the PDF is image-based.');
     }
 
-    console.log('Raw extracted text appears valid. Proceeding.');
     let cleanText = extractedText.replace(/\s+/g, ' ').trim();
     if (cleanText.length > 4000) cleanText = cleanText.substring(0, 4000);
     
-    console.log(`Sending ${cleanText.length} characters to AI.`);
+    console.log(`Sending ${cleanText.length} chars to AI.`);
 
     const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -97,10 +105,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'llama3-8b-8192',
         messages: [
-          {
-            role: 'system',
-            content: 'You are an expert resume parsing assistant. Analyze the provided resume text and extract key information. Your response MUST be a single, valid JSON object and nothing else. The JSON object should have these fields: "full_name", "email", "phone", "location", "summary", "skills" (array of strings), "experience" (array of objects with "title", "company", "duration", "description" fields), "education" (array of objects with "degree", "institution", "year" fields). If a field is not found, use null or an empty array.'
-          },
+          { role: 'system', content: 'You are an expert resume parsing assistant. Analyze the provided resume text and extract key information. Your response MUST be a single, valid JSON object and nothing else. The JSON object should have these fields: "full_name", "email", "phone", "location", "summary", "skills" (array of strings), "experience" (array of objects with "title", "company", "duration", "description" fields), "education" (array of objects with "degree", "institution", "year" fields). If a field is not found, use null or an empty array.' },
           { role: 'user', content: `Extract data from this resume text: ${cleanText}` }
         ],
         response_format: { type: "json_object" },
@@ -110,8 +115,7 @@ serve(async (req) => {
     });
 
     if (!groqResponse.ok) {
-      const errorText = await groqResponse.text();
-      throw new Error(`Groq API failed with status ${groqResponse.status}: ${errorText}`);
+      throw new Error(`Groq API failed: ${await groqResponse.text()}`);
     }
 
     const groqData = await groqResponse.json();
@@ -124,8 +128,8 @@ serve(async (req) => {
     const { data: resumeData, error: resumeError } = await supabaseClient
       .from('resumes').select('user_id').eq('id', resumeId).single();
 
-    if (resumeError) throw new Error(`Database error when fetching resume: ${resumeError.message}`);
-    if (!resumeData) throw new Error(`Resume with ID ${resumeId} not found. This is likely a permission issue due to Row Level Security (RLS).`);
+    if (resumeError) throw new Error(`DB error fetching resume: ${resumeError.message}`);
+    if (!resumeData) throw new Error(`Resume with ID ${resumeId} not found.`);
 
     const { error: insertError } = await supabaseClient.from('parsed_resume_details').insert({
       resume_id: resumeId, user_id: resumeData.user_id,
@@ -147,10 +151,8 @@ serve(async (req) => {
 
   } catch (error) {
     console.error(`Error processing resume ${resumeId || 'unknown'}:`, error.message);
-    
     if (resumeId) {
       try {
-        // Use a service_role client to guarantee the status update works
         const serviceClient = createClient(
           Deno.env.get('SUPABASE_URL') ?? '',
           Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -161,7 +163,6 @@ serve(async (req) => {
         console.error('Fatal: Failed to update resume status to failed.', updateError);
       }
     }
-    
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
