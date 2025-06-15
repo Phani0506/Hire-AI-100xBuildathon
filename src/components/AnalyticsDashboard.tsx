@@ -1,4 +1,3 @@
-
 import { useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
@@ -20,13 +19,13 @@ const chartConfig = {
 const fetchAnalyticsData = async () => {
   const { data: resumes, error: resumesError } = await supabase
     .from('resumes')
-    .select('created_at, parsing_status');
-  if (resumesError) throw new Error(resumesError.message, { cause: 'resumes' });
+    .select('uploaded_at, parsing_status');
+  if (resumesError) throw new Error(resumesError.message);
 
   const { data: parsedDetails, error: parsedDetailsError } = await supabase
     .from('parsed_resume_details')
     .select('skills_json, location');
-  if (parsedDetailsError) throw new Error(parsedDetailsError.message, { cause: 'parsed_details' });
+  if (parsedDetailsError) throw new Error(parsedDetailsError.message);
 
   return { resumes, parsedDetails };
 };
@@ -46,13 +45,18 @@ const AnalyticsDashboard = () => {
     const resumesParsed = resumes.filter(r => r.parsing_status === 'completed').length;
 
     const skillsCount = parsedDetails
-      .flatMap(d => d.skills_json || [])
+      .flatMap(d => {
+        if (!d.skills_json || !Array.isArray(d.skills_json)) return [];
+        return d.skills_json;
+      })
       .reduce((acc, skill) => {
-        if (skill) {
-          acc[skill.trim().toLowerCase()] = (acc[skill.trim().toLowerCase()] || 0) + 1;
+        if (skill && typeof skill === 'string') {
+          const skillName = skill.trim().toLowerCase();
+          acc[skillName] = (acc[skillName] || 0) + 1;
         }
         return acc;
       }, {} as Record<string, number>);
+    
     const topSkills = Object.entries(skillsCount)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 6)
@@ -60,7 +64,7 @@ const AnalyticsDashboard = () => {
 
     const locationsCount = parsedDetails
       .reduce((acc, detail) => {
-        const location = detail.location?.split(',')[0].trim() || 'Unknown';
+        const location = detail.location?.split(',')[0]?.trim() || 'Unknown';
         if (location && location.length > 1) {
           acc[location] = (acc[location] || 0) + 1;
         }
@@ -72,7 +76,7 @@ const AnalyticsDashboard = () => {
       .map(([name, count]) => ({ name, count }));
 
     const uploadsByMonth = resumes.reduce((acc, resume) => {
-      const month = new Date(resume.created_at).toLocaleString('default', { month: 'short' });
+      const month = new Date(resume.uploaded_at).toLocaleString('default', { month: 'short' });
       acc[month] = (acc[month] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -140,8 +144,8 @@ const AnalyticsDashboard = () => {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Active Searches</p>
-                <p className="text-3xl font-bold text-gray-900">45</p>
+                <p className="text-sm font-medium text-gray-600">Top Skills</p>
+                <p className="text-3xl font-bold text-gray-900">{analyticsData.topSkills.length}</p>
               </div>
               <Search className="w-8 h-8 text-green-600" />
             </div>
@@ -152,8 +156,8 @@ const AnalyticsDashboard = () => {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">Success Rate</p>
-                <p className="text-3xl font-bold text-gray-900">94%</p>
+                <p className="text-sm font-medium text-gray-600">Locations</p>
+                <p className="text-3xl font-bold text-gray-900">{analyticsData.topLocations.length}</p>
               </div>
               <TrendingUp className="w-8 h-8 text-orange-600" />
             </div>
@@ -255,6 +259,5 @@ const AnalyticsSkeleton = () => (
         </div>
     </div>
 );
-
 
 export default AnalyticsDashboard;
