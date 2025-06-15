@@ -44,19 +44,8 @@ serve(async (req) => {
   let resumeId;
   try {
     const requestBody = await req.json();
-
-    // ** THE FIX: Handle both Webhook and direct invoke **
-    let filePath;
-    // Check if this is a webhook invocation
-    if (requestBody.record) {
-      console.log('Processing via webhook...');
-      resumeId = requestBody.record.id;
-      filePath = requestBody.record.file_path;
-    } else { // This is a direct invocation
-      console.log('Processing via direct invoke...');
-      resumeId = requestBody.resumeId;
-      filePath = requestBody.filePath;
-    }
+    resumeId = requestBody.resumeId;
+    const filePath = requestBody.filePath;
     
     if (!resumeId || !filePath) {
       throw new Error(`Missing resumeId or filePath in the request body. Body received: ${JSON.stringify(requestBody)}`);

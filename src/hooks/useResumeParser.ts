@@ -7,8 +7,28 @@ export const useResumeParser = () => {
     try {
       console.log('Triggering resume parsing for:', resumeId);
       
+      // First, get the resume details to find the file path
+      const { data: resumeData, error: fetchError } = await supabase
+        .from('resumes')
+        .select('supabase_storage_path')
+        .eq('id', resumeId)
+        .single();
+
+      if (fetchError || !resumeData) {
+        console.error('Error fetching resume data:', fetchError);
+        toast({
+          title: "Parsing failed",
+          description: "Could not find resume file. Please try uploading again.",
+          variant: "destructive"
+        });
+        return false;
+      }
+
       const { data, error } = await supabase.functions.invoke('parse-resume', {
-        body: { resumeId }
+        body: { 
+          resumeId: resumeId,
+          filePath: resumeData.supabase_storage_path
+        }
       });
 
       if (error) {
