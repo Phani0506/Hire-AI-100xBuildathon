@@ -9,6 +9,7 @@ import ResumeUpload from "@/components/ResumeUpload";
 import TalentSearch from "@/components/TalentSearch";
 import AnalyticsDashboard from "@/components/AnalyticsDashboard";
 import ResumeList from "@/components/ResumeList";
+import PeopleGPT from "@/components/PeopleGPT";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
@@ -112,7 +113,11 @@ const Dashboard = () => {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 bg-white/60 backdrop-blur-sm">
+          <TabsList className="grid w-full grid-cols-6 bg-white/60 backdrop-blur-sm">
+            <TabsTrigger value="peoplegpt" className="flex items-center space-x-2">
+              <Users className="w-4 h-4" />
+              <span className="hidden sm:inline">PeopleGPT</span>
+            </TabsTrigger>
             <TabsTrigger value="upload" className="flex items-center space-x-2">
               <Upload className="w-4 h-4" />
               <span className="hidden sm:inline">Upload</span>
@@ -134,6 +139,10 @@ const Dashboard = () => {
               <span className="hidden sm:inline">Settings</span>
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="peoplegpt">
+            <PeopleGPT />
+          </TabsContent>
 
           <TabsContent value="dashboard">
             <AnalyticsDashboard />
