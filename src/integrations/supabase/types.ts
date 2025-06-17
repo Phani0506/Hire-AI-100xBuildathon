@@ -9,6 +9,27 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      auth_logs: {
+        Row: {
+          created_at: string
+          event_type: string
+          id: string
+          user_email: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          id?: string
+          user_email?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          id?: string
+          user_email?: string | null
+        }
+        Relationships: []
+      }
       parsed_resume_details: {
         Row: {
           created_at: string
@@ -124,7 +145,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      log_auth_event: {
+        Args: { event_type: string; user_email?: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never
