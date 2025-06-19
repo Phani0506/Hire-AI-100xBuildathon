@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Search, FileText, BarChart } from "lucide-react";
 import AuthModal from "@/components/AuthModal";
+import Dashboard from "@/components/Dashboard";
 import { useState } from "react";
 
 const Index = () => {
@@ -25,10 +26,8 @@ const Index = () => {
     );
   }
 
-  // If user is logged in, redirect to landing page
   if (user) {
-    window.location.href = "/landing";
-    return null;
+    return <Dashboard />;
   }
 
   return (
