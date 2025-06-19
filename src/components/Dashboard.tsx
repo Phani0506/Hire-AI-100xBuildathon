@@ -34,6 +34,7 @@ const Dashboard = () => {
 
   const handleLogout = async () => {
     await signOut();
+    navigate("/");
   };
 
   const handleBackToLanding = () => {
