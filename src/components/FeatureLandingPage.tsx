@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,8 +56,14 @@ const FeatureLandingPage = () => {
   const navigate = useNavigate();
 
   const handleLogout = async () => {
-    await signOut();
-    navigate("/");
+    try {
+      await signOut();
+      navigate("/");
+    } catch (error) {
+      console.error("Logout error:", error);
+      // Force redirect even if logout fails
+      navigate("/");
+    }
   };
 
   const handleFeatureClick = (featureId: string) => {

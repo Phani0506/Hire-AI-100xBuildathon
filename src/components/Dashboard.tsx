@@ -33,8 +33,18 @@ const Dashboard = () => {
   }, [tabFromUrl]);
 
   const handleLogout = async () => {
-    await signOut();
-    navigate("/");
+    try {
+      await signOut();
+      // Clear any local state or cached data if needed
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      navigate("/");
+    } catch (error) {
+      console.error("Logout error:", error);
+      // Force redirect even if logout fails
+      navigate("/");
+    }
   };
 
   const handleBackToLanding = () => {
