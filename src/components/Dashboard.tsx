@@ -1,10 +1,9 @@
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Users, Search, Upload, BarChart, FileText, User, Settings, Lock } from "lucide-react";
+import { Users, Search, Upload, BarChart, FileText, User, Settings, Lock, ArrowLeft } from "lucide-react";
 import ResumeUpload from "@/components/ResumeUpload";
 import TalentSearch from "@/components/TalentSearch";
 import AnalyticsDashboard from "@/components/AnalyticsDashboard";
@@ -13,17 +12,32 @@ import PeopleGPT from "@/components/PeopleGPT";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 const Dashboard = () => {
   const { user, signOut } = useAuth();
-  const [activeTab, setActiveTab] = useState("dashboard");
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const tabFromUrl = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(tabFromUrl || "dashboard");
+  
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  useEffect(() => {
+    if (tabFromUrl) {
+      setActiveTab(tabFromUrl);
+    }
+  }, [tabFromUrl]);
+
   const handleLogout = async () => {
     await signOut();
+  };
+
+  const handleBackToLanding = () => {
+    navigate("/landing");
   };
 
   const handleChangePassword = async () => {
@@ -84,13 +98,24 @@ const Dashboard = () => {
       <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
-                <Users className="w-5 h-5 text-white" />
+            <div className="flex items-center space-x-4">
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={handleBackToLanding}
+                className="flex items-center space-x-2 text-gray-600 hover:text-gray-800"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Back to Features</span>
+              </Button>
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
+                  <Users className="w-5 h-5 text-white" />
+                </div>
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                  HIRE AI
+                </h1>
               </div>
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                HIRE AI
-              </h1>
             </div>
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2">
@@ -107,11 +132,6 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <div className="container mx-auto px-6 py-8">
-        <div className="mb-8">
-          <h2 className="text-3xl font-bold mb-2 text-gray-800">Welcome back!</h2>
-          <p className="text-gray-600">Manage your talent pool and find the perfect candidates with AI-powered tools.</p>
-        </div>
-
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="grid w-full grid-cols-6 bg-white/60 backdrop-blur-sm">
             <TabsTrigger value="peoplegpt" className="flex items-center space-x-2">
