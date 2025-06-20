@@ -1,14 +1,23 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react-swc";Add commentMore actions
+import path from "path";
+import { componentTagger } from "lovable-tagger";
 
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    // Required for React Router's BrowserRouter to work in dev
-    historyApiFallback: true,
-  },
-  build: {
-    // Optional: specify output folder (default is 'dist')
-    outDir: 'dist',
-  },
-});
+More actions
+// https://vitejs.dev/config/
+server: {Add commentMore actions
+    host: "::",
+    port: 8080,
+export default defineConfig(({ mode }) => ({
+},
+  plugins: [
+    react(),
+    mode === 'development' &&
+    componentTagger(),
+  ].filter(Boolean),
+  resolve: {Add commentMore actions
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+},Add commentMore actions
+}));
