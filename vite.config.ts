@@ -1,23 +1,22 @@
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react-swc";Add commentMore actions
+import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
-More actions
 // https://vitejs.dev/config/
-server: {Add commentMore actions
+export default defineConfig(({ mode }) => ({
+  server: {
     host: "::",
     port: 8080,
-export default defineConfig(({ mode }) => ({
-},
+    historyApiFallback: true, // ensures React Router fallback in dev
+  },
   plugins: [
     react(),
-    mode === 'development' &&
-    componentTagger(),
+    mode === 'development' && componentTagger(),
   ].filter(Boolean),
-  resolve: {Add commentMore actions
+  resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
-},Add commentMore actions
+  },
 }));
